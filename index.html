@@ -19,8 +19,8 @@ body{-webkit-font-smoothing:antialiased;font:normal .8764em/1.5em Arial,Verdana,
 
 </head>
 <body class="normal">
-
-<h1 id="dottedversionvectorsinriak">Dotted Version Vectors In Riak</h1>
+  <div id="wrapper">
+      <h1 id="dottedversionvectorsinriak">Dotted Version Vectors In Riak</h1>
 
 <p><a href="http://basho.com/posts/technical/vector-clocks-revisited/">Last time</a>
 I wrote about vnode version vectors, and how they simplify client
@@ -48,19 +48,15 @@ version vector algorithm. Let&#8217;s quickly recap how.</p>
 <p>With a <em>ClientId Version Vector</em> Riak generated siblings like this:</p>
 
 <ol>
-<li>Client read - Get Value and Version Vector</li>
-<li>Client sends new Value + Client Id + Version Vector</li>
-<li>Riak increments Client&#8217;s entry in Version Vector</li>
-<li>Riak vnode reads local Version Vector</li>
 <li>If Local Version Vector <em>descends</em> Incoming
 
 <ol>
-<li>Write new value to disk</li>
+<li>Discard/ignore incoming write</li>
 </ol></li>
 <li>If Incoming <em>descends</em> Local
 
 <ol>
-<li>Discard/ignore incoming write</li>
+<li>Write new value to disk</li>
 </ol></li>
 <li>If Incoming <em>concurrent</em> with Local
 
@@ -72,30 +68,27 @@ version vector algorithm. Let&#8217;s quickly recap how.</p>
 
 <p>But with Vnode Version Vectors this becomes:</p>
 
-<ul>
-<li>Client read - Get Value and Version Vector</li>
-<li>Client sends new Value + Version Vector</li>
-<li>Riak vnode reads local Version Vector</li>
+<ol>
 <li>If Local Version Vector <em>descends</em> Incoming
 
-<ul>
-<li>Increment Vnode&#8217;s entry in <em>incoming</em> Version Vector</li>
-<li>Write new value to disk</li>
-</ul></li>
-<li>If Incoming <em>descends</em> Local
-
-<ul>
+<ol>
 <li>Increment Vnode&#8217;s entry in <em>local</em> Version Vector</li>
 <li>Store Incoming value as a <em>sibling</em></li>
-</ul></li>
+</ol></li>
+<li>If Incoming <em>descends</em> Local
+
+<ol>
+<li>Increment Vnode&#8217;s entry in <em>incoming</em> Version Vector</li>
+<li>Write new value to disk</li>
+</ol></li>
 <li>If Incoming <em>concurrent</em> with Local
 
-<ul>
+<ol>
 <li><em>Merge</em> Incoming and Local Version Vectors</li>
 <li>Increment Vnode&#8217;s entry in <em>merged</em> Version Vector</li>
 <li>Store Incoming value as a <em>sibling</em></li>
-</ul></li>
-</ul>
+</ol></li>
+</ol>
 
 <p>We use a single version vector to cover the full set of sibling
 values. But a version vector is not enough to correctly track
@@ -175,7 +168,7 @@ updates. Integers make great summaries. 4 includes 1, 2, 3, 4. Each of
 those steps that the counter went through is an update. And that is
 all a dot is: a single update, an event. Take the update <code>{a,
 4}</code>. That is an event, an update, a dot. You can think of the Version
-Vector entry <code>{a, 4}</code> as a set of discreet events, and a dot as any
+Vector entry <code>{a, 4}</code> as a set of discrete events, and a dot as any
 one of those events.</p>
 
 <figure>
@@ -243,7 +236,7 @@ incoming DVV with the local one. The visualization of that PUT with
 dot assigned hopefully explains the name.</p>
 
 <figure>
-<img src="Dotted-Ctx.png" alt="Context of {a, 1} with a Dot of {a,3}" title="Context of [{a,1}] and a dot of {a, 3}" />
+<img src="dotted-ctx.png" alt="Context of {a, 1} with a Dot of {a,3}" title="Context of [{a,1}] and a dot of {a, 3}" />
 <figcaption>Context of {a, 1} with a Dot of {a,3}</figcaption></figure>
 
 
@@ -273,8 +266,10 @@ code is also currently used in Riak for tracking Cluster Meta Data.</p>
 nor care about the details. From a client perspective it is the same
 as Vnode Version Vectors, minus of course the sibling explosions.</p>
 
-<p>If you want to use Dotted Version Vectors in your applications, then I
-recommend you read the paper, and Ricardo Tomé Gonçalves repo.</p>
+<p>If you want to use Dotted Version Vectors in your own distributed
+application, then I recommend you read the
+<a href="http://arxiv.org/abs/1011.5808">paper</a>, and Ricardo Tomé Gonçalves
+<a href="https://github.com/ricardobcl/Dotted-Version-Vectors">repo</a>.</p>
 
 <h2 id="withthanks">With thanks</h2>
 
