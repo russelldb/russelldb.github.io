@@ -1,4 +1,0 @@
-User-agent: *
-Disallow: 
-
-Sitemap: http://russelldb.github.io/sitemap.xml 
