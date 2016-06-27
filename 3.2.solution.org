@@ -1,0 +1,114 @@
+* Version Vectors - When History Repeats Part II
+In my last post I described an interesting anomaly that is very much
+related to the "Read Your Own Writes" issue described in the first of
+these posts. To summarize, if a vnode (as actor in the system) is
+unable for whatever reason to read its own highest event counter, it
+may create a version vector entry for some new event that is lower
+than exists elsewhere in the system. The end result of which maybe
+that some past event looks like it happened at a later causal time
+than some newer event, and the data for the newer event is lost.
+
+This post is about the solution we decided to implement in Riak.
+
+** Requirements
+
+It's clear that the solution has to allow the deletion of data. And it
+has to allow that disk errors (and operator errors) occur.
+
+The solution must ensure that a vnode's inability to read its own
+writes does not result in data loss.
+
+Riak is a "live" system. So the requirements are more stringent.
+
+There are thousands of Riak nodes in production right now. Thanks to
+Riak's automatic fault tolerance and elastic scaling a cluster can be
+upgraded in place, while running and serving production load. The
+procedure is to either take a node offline, upgrade it, then re-add it
+(and repeat, until all nodes are upgraded.) Or to create new node with
+the latest release, and add it to the cluster, and remove an old node,
+and repeat. However a cluster is upgraded it must continue to serve
+requests, which means clusters must be able to run with mixed versions
+or Riak.
+
+A node may have a great deal of data on disk. We don't want to have to
+read every single piece of data, change it, and write it back, when we
+upgrade.
+
+In the real world things go wrong, and customers sometimes want to
+roll back an upgrade. In other words: we must support downgrades.
+
+When we release new code we try and ship it with a "kill switch."
+Basho engineering take quality very seriously, and I'd love to write a
+post about _that_ one day, but everyone makes mistakes and sometimes
+the world unfolds in unpredictable ways, so being able to "turn off"
+any new code is a great safety net for our customers.
+
+Although we put the data first always, and consider safety to be the
+guiding principal of our work, we never want to sacrifice performance.
+
+With all that said, it's clear that we have to find a fix that:
+
+1. is both backward and forward compatible
+2. doesn't require changing all existing data
+3. can be switched on and off
+4. performs as well as the current code
+
+1, 2 and 3 above all imply that the fix must be wholly inter-operable
+with existing code and data.
+
+* Epochs
+
+The concept for a solution is "Epochs." Using the idea of epochs we
+can distinguish between the first time vnode `A` creates key `X` and
+the second, and third, and so on. If each time vnode `A` first adds an
+entry to the version vector is some how from a unique epoch, greater
+than the last, there is no way that a tombstone from the "future" can
+delete new data from "the past". Epochs can distinguish between `[{a,
+1}]` the first time and `[{a, 1}]` the second time. That's the
+idea. How do we implement it in Riak?
+
+The answer is to treat each `not_found` for a key as a new epoch. We
+don't know, when coordinating at node `A` if this is the first or
+100th time we've created this key, but if we assign a unique,
+monotonically increasing integer, which we call the `Epoch` for the
+key we can treat this incarnation of the key as distinct from prior
+and later ones.
+
+** Unilateral Epochs
+Each actor assigns it;s own epoch. Since we can't coordinate, and two
+vnodes can "create" at the same time, the epochs must be
+per-actor. Since we never compare logical clocks for keys, and all
+keys are disjoint, we have per-key epochs.
+
+** Per-Key-Actor-Epochs
+The scheme then assigns a new actorId to a key for each of it's
+epochs. Why an actor ID? We've already seen we need
+per-actor-epochs. And that a global per-key-epoch is impossible. An
+actor ID then makes it possible to define an epoch for a value (since,
+if you recall from post 2, values have dots.)
+
+** Do high Epochs "win?"
+No! Consider the case of local amnesia. Here the new epoch is
+_concurrent_ with the existing values in the system. This is another
+reason for per-actor-epochs being expressed as actor IDs. Normal
+version vector resolution will cause the unique ID for the new epoch
+to be concurrent with the unique ID for the prior epoch. Thus
+maintaining both siblings.
+
+In the case of doomstones, or unreaped tombstones, technically the new
+epoch could supercedd the old, but treating them as concurrent is at
+least safe. The doomstone does not blat the new data, and can be
+resolved away with application logic.
+
+** Actor explosion: Or how it does it
+A vnode is the actor in the system. It must have a unique ID. Recall
+from post 1 that the size of the version vector is proportional to the
+number of actors. This is why we moved the server side IDs, (or vndoe
+vclocks.) A vnode is responsible for many, many keys. If we create a
+new unique actor ID for a vnode everytime is coordinates a write to a
+new key, won't that result in terrible actor explosion? So how do we
+generate a unique actor ID per-key-epoch without having massive
+version vectors? How can we ensure that creating key X then Y then
+updating X means the the vnode updates the same entry in X's Version
+Vector for all subsequent updates?
+
