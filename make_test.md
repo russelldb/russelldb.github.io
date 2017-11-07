@@ -1,9 +1,8 @@
 # Making `make test` pass
 
-I've spent some time lately on getting Riak's`make test` command to
-run reliably. The process has thrown up a few questions, but the
-result is that one can now run `make test` on a top-level Riak clone
-and all the dependency tests pass (hopefully.)
+I've spent some time getting Riak's `make test` command to
+run reliably. The TL;DR is that one can now run `make test` on a top-level Riak clone
+and all the tests pass.
 
 ## Why?
 
