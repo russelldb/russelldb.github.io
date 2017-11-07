@@ -13,7 +13,7 @@ don't think it matters anymore, either. Given the disorderly
 dissolution of Basho the projects are in surprisingly good shape.
 
 If Riak is going to continue to exist as an open source, community run
-project, it must possible to contribute, and to do that there must be
+project, it must be possible to contribute, and to do that there must be
 a trustworthy test suite. Without addressing the merits of the current
 test suite, it should at least pass deterministically on the currently
 shipped code, and then we can improve on it.
