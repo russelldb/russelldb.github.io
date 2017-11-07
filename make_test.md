@@ -104,7 +104,7 @@ worse by slackening the test constraints, whatever, it feels bad<sup id="a1">[1]
 
 - Riak hasn't been updated to run on a modern Erlang.
 
-- Riak still uses rebar3.
+- Riak hasn't been updated to use rebar3.
 
 The reason being, as stated above, that we want Riak-2.2.5 to be as
 low-risk as possible, whilst still having an incentive to deploy the
