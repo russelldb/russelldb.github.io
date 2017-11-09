@@ -142,7 +142,9 @@ You can get in touch with me via slack, IRC, or the mailing list and
 let me know how it went. Many thanks!
 
 ------
+
 UPDATE: I just added the newly open sourced (thanks bet365) riak_repl, riak_snmp, and riak_jmx (AKA Enterprise Riak) deps to the NHS fork, and the tests pass.
+
 ------
 
 
