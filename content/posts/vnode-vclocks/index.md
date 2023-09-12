@@ -6,17 +6,11 @@ date = "2015-10-06"
 Vector Clocks Revisited
 =======================
 
-Posted October 6, 2015
-
-[by Russell Brown](/posts/author/russell-brown/index.html)
-
-Category: [Technical Blog](/category/technical/index.html)
-
 In our everyday lives we use the notion of time to order events: get up before breakfast, eat before work, etc. As this excellent [ACM](https://queue.acm.org/detail.cfm?id=2745385) article shows, time can be complex in a distributed system.
 
-This is the first of three blog posts about changes to Riak’s logical clocks. They cover a lot of ground: over 3 years. If you prefer to watch a talk, then [Sean Cribbs’](https://twitter.com/seancribbs) excellent “Brief History Of Time (In Riak)” talk from last year’s RICON covers much of what is covered in this post.. The aim is to write about my latest work with logical clocks in Riak, but in order to have a context, we first need to go back in time.
+This is the first of three blog posts about changes to Riak’s logical clocks. They cover a lot of ground: over 3 years. The aim is to write about my latest work with logical clocks in Riak, but in order to have a context, we first need to go back in time.
 
-Back in 2010 Riak engineers published two seminal blog posts about Vector Clocks and Riak: [“Why Vector Clocks Are Easy”](/why-vector-clocks-are-easy/index.html) and it’s companion piece [“Why Vector Clocks Are Hard.”](/why-vector-clocks-are-hard/index.html)
+Back in 2010 Riak engineers published two seminal blog posts about Vector Clocks and Riak: [“Why Vector Clocks Are Easy”](https://riak.com/why-vector-clocks-are-easy/index.html) and it’s companion piece [“Why Vector Clocks Are Hard.”](https://riak.com/why-vector-clocks-are-hard/index.html)
 
 These two posts are still very valuable, and worth reading, but a lot has changed since then. This series of posts will hopefully bridge the gap.
 
@@ -30,7 +24,7 @@ From here on, these logical clocks will be referred to as _Version Vectors_, wit
 **Part 1: Vnode Version Vectors**
 ---------------------------------
 
-The subject of this first post is a major change to Riak KV’s logical clocks in the 1.0 release back in September 2011. At that time Riak KV moved from _client side IDs_ to _vnode IDs_. In the [“Why Vector Clocks Are Hard”](/why-vector-clocks-are-hard/index.html) article mentioned above the author explains that this is a difficult thing to do, but the benefits appeared to outweigh the costs.
+The subject of this first post is a major change to Riak KV’s logical clocks in the 1.0 release back in September 2011. At that time Riak KV moved from _client side IDs_ to _vnode IDs_. In the [“Why Vector Clocks Are Hard”](https://riak.com/why-vector-clocks-are-hard/index.html) article mentioned above the author explains that this is a difficult thing to do, but the benefits appeared to outweigh the costs.
 
 But, before all that, some basics.
 
@@ -50,7 +44,7 @@ Var = \[{atomx, Var1}, {atomz, Var2}\] %% this is a binding that says Var is equ
 
 ### **Version Vector Recap**
 
-[Skip down to the next section](index.html?p=9545.html#next-section) if you already know how Version Vectors work (that means you [Kyle!](http://teespring.com/doyouevenknow4))
+Skip down to the next section if you already know how Version Vectors work.
 
 A Version Vector is a data structure that summarises the history of updates to a value. In Riak each Key has its own Version Vector. The data structure is a list of pairs of Actor and Counter.
 
