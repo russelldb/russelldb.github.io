@@ -249,4 +249,4 @@ As a result of false concurrency riak is unable to accurately discern truly conc
 
 Since we released Riak 1.0, we no longer need to talk about “vclocks”, but instead a “causal context” or just “context”. Vnode Version Vectors solved some difficult issues for Riak users around availability and client process management, but they came with some costs. For the sake of completeness, here are the [release notes for Vnode Version Vectors](https://github.com/basho/riak/blob/1.0/RELEASE-NOTES.org#getput-improvements).
 
-Next time we’ll look at that “sibling explosion” bug in Vnode Version Vectors, and how academic intervention saved the day.
+[Next time](../dvv) we’ll look at that “sibling explosion” bug in Vnode Version Vectors, and how academic intervention saved the day.
