@@ -1,5 +1,0 @@
-[submodule "themes/apollo"]
-	path = themes/apollo
-	url = https://github.com/rdb/apollo
-        branch = rdb
-
