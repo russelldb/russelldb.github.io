@@ -3,6 +3,8 @@ title = "Testing CRDTs in Rust, From Theory to Practice"
 date = "2022-04-05"
 +++
 
+**This post was originally written for and published on the [Ditto Blog](https://www.ditto.live/blog/testing-crdts-in-rust-from-theory-to-practice).**
+
 Ditto is a database that puts theory in to practice. Ditto's peer-to-peer
 data-structures, based on CRDTs, are deployed into real-world production
 use cases. As we make improvements to the underlying data-structures,
