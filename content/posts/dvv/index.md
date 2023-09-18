@@ -252,7 +252,7 @@ Explosion.
 
 ## Next Time on Logical Clocks
 
-In the next post we look at another, less common bug that can lead to
+In the [next post](../per-key-epochs) we look at another, less common bug that can lead to
 the past looking like the future.
 
 * * *

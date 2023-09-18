@@ -6,7 +6,7 @@ date = "2015-12-31"
 
 # Per-Key Actor Epochs In Riak
 
-[Last time](../dvv)
+[Last time](../posts/dvv)
 I wrote about how Dotted Version Vectors fix Sibling
 Explosion. Sibling Explosion was relatively common bug, often seen in
 the wild. This post is about a subtle bug that manifests in a number
@@ -20,7 +20,7 @@ Riak.
 
 The bug itself is very similar to the requirement to Read Your Own
 Writes for Client Version Vectors, so if you haven't read
-[part one](../vnode-vclocks)
+[part one](../posts/vnode-vclocks)
 now is a good time to do so.
 
 ## Why RYOW, again?
