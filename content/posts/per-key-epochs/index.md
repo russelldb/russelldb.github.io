@@ -123,9 +123,9 @@ If the node **`A`** that some key **`X`** should be stored on is unavailable
 when a client wishes to write **`X`** some other node **`A'`** will step in
 and handle that write as a _fallback_. When the node **`A`** is available
 again then the fallback node will _hand off_ any data it stored. All
-this means is node **`A'`** sends any data that it stored for node **`A`
+this means is node **`A'`** sends any data that it stored for node **`A`**
 back to node **`A`**. Of course the magic of Version Vectors is how node
-`A`** knows if it should add node **`A'`s data as a sibling, discard it,
+**`A`** knows if it should add node **`A'`** data as a sibling, discard it,
 or overwrite it's local data.
 
 ## Doomstones
@@ -144,8 +144,8 @@ A client decides to delete key **`X`**. It reads key **`X`** and gets the Versio
 
 Which means that actor **`A`** has issued two updates to **`X`**. The Client
 sends the delete command and version vector to Riak. Riak creates a
-`tombstone`** value and writes it. However, only primary nodes **`A`** and
-`B`** are available, node **`C`** appears offline, maybe some congestion at
+**`tombstone`** value and writes it. However, only primary nodes **`A`** and
+**`B`** are available, node **`C`** appears offline, maybe some congestion at
 a network switch, or some other problem. Maybe an operator took **`C`**
 offline to replace a faulty NIC. Whatever, node **`C'`** handles the write
 of the tombstone as a _fallback_. The client is notified the delete
@@ -205,7 +205,7 @@ the data, a write shouldn't fail if one is lost.
 Turns out this can be bad, too. Failing to read the local version
 vector for _whatever_ reason leads to a new version vector being
 created for the key. Imagine some key **`X`** is on replicas **`A`**  **`B`**  and
-`C`** with version vector
+**`C`** with version vector
 
 ```Erlang
     [{A, 3}, {B, 2}, {C, 5}]
