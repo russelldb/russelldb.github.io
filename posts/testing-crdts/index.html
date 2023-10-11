@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html class="dark light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Testing CRDTs in Rust, From Theory to Practice
+        
+    </title>
+
+        
+            <meta property="og:title" content="Testing CRDTs in Rust, From Theory to Practice" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://wombat.me/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="" href="https://wombat.me/atom.xml">
+
+
+    
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://wombat.me/main.css />
+
+    
+
+    <script src=https://wombat.me/js/feather.min.js></script>
+</head>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;wombat.me></a>
+
+        <div class="socials">
+            
+            <a rel="me" href="https:&#x2F;&#x2F;github.com&#x2F;russelldb" class="social">
+                <img alt=GitHub src="/social_icons/github.svg">
+            </a>
+            
+        </div>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F; style="margin-left: 0.7em">Home</a>
+        
+    </nav>
+
+    
+</header>
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Testing CRDTs in Rust, From Theory to Practice<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2022-04-05</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <p><strong>This post was originally written for and published on the <a href="https://www.ditto.live/blog/testing-crdts-in-rust-from-theory-to-practice">Ditto Blog</a>.</strong></p>
+<p>Ditto is a database that puts theory in to practice. Ditto's peer-to-peer
+data-structures, based on CRDTs, are deployed into real-world production
+use cases. As we make improvements to the underlying data-structures,
+we leverage stateful property-based testing to ensure that Ditto's
+core data-structures maintain their robustness and stability. In this
+article, we show how this type of testing helped reveal a surprising
+problem in an academic paper's optimized CRDT.</p>
+<h2 id="what-are-crdts">What Are CRDTs?</h2>
+<p>CRDTs are data-structures that can be used in distributed systems that
+allow relaxed consistency models. They make handling conflicting
+updates easier for programmers, and enable the development of
+peer-to-peer and
+<a href="https://www.inkandswitch.com/local-first/">&quot;local-first&quot;</a>
+applications. They're the primary data-structure that developers work
+with in Ditto's Document Database. CRDTs allow Ditto to integrate
+concurrent changes from clients into a single, deterministic, and
+meaningful value.</p>
+<p>Over time the words that lend their initials to form the acronym CRDT
+have often changed, it is usually accepted that CRDT stands for
+Conflict-Free Replicated Datastructure, or in our case Convergent
+Replicated Datastructures.</p>
+<p>There has been a lot written about CRDTs, but a good starting place to
+learn more is <a href="https://crdt.tech/">crdt.tech</a></p>
+<p>Ditto uses a <a href="https://docs.ditto.live/common/how-it-works/big-peer#ditto-crdts">State-based CRDT</a>. State-based CRDTs use metadata inside
+the data-structure to track causality and determine a value. We
+developed a novel type of Delta-State CRDTs for Ditto, which we will
+explain in more detail at a later date (stay tuned!) where the
+differences between peers is calculated and sent over the network,
+rather than sending the full state.</p>
+<h2 id="implementing-a-new-crdt">Implementing A New CRDT</h2>
+<p>Ditto's database represents a document as a CRDT map with additional
+nested CRDTs for values. Today, the Ditto Document currently only
+supports Remove Wins behavior. My current task at Ditto is to create a
+new CRDT Map that supports both Add Wins and Remove Wins
+behavior. This is a novel data-type which allows the developer to
+choose the behavior when performing a remove operation.</p>
+<p><em>Throughout this article I write mainly about Sets, as they are simpler
+to describe and reason about, but what is discussed can also be extended to
+Maps.</em></p>
+<p>Add Wins and Remove Wins are choices in CRDT Set behavior. Given
+concurrent updates to the same element in a Set, where one peer
+inserts the element and another removes it, you have a choice: either
+the Add Wins and the inserted element is in the Set, or the Remove
+Wins and the element is not in the Set. In order to enable Remove Wins
+behaviour, State-based CRDT sets tend to use some metadata, called a
+tombstone, that marks an element as removed. To understand the
+difference between Add Wins and Remove Wins, check out the graphics
+below.</p>
+<h2 id="add-wins-behavior">Add-Wins Behavior</h2>
+<p><img src="https://wombat.me/posts/testing-crdts/add_wins_example.png" alt="What is Add Wins CRDT set behavior?" /></p>
+<h2 id="remove-wins-behavior">Remove-Wins Behavior</h2>
+<p><img src="https://wombat.me/posts/testing-crdts/remove_wins_example.png" alt="What is Remove Wins CRDT set behavior?" /></p>
+<p>Ditto observes this situation often from its customers in
+the airline industry. Before takeoff, two flight attendants
+with tablets or phones, in this case peer 1 and peer 2,
+may download backend data before syncing with each other.
+When these two disconnected flight attendants make concurrent,
+offline edits to the database before syncing, as shown in the
+graphics above, merging of the two devices results in
+different behavior depending on the CRDT set behavior.</p>
+<p>Remove Wins behavior can be surprising for some users, however. In general it
+makes sense, as it does what it says: given any pair of concurrent add
+and remove operations, the remove will win. However, with the
+following sequence enacted concurrently by two peers, everyone is
+surprised by the result:</p>
+<ol>
+<li>Peer 1 adds element X to the set</li>
+<li>Peer 1 removes element X from the set</li>
+<li>Peer 1 re-adds element X to the set</li>
+<li>Peer 2 adds element X to the set</li>
+<li>Peer 2 removes element X from the set</li>
+<li>Peer 2 re-adds element X to the set</li>
+<li>Peer 1 merges with Peer2 and vice versa</li>
+<li>X is <em>not</em> in the set</li>
+</ol>
+<p>To explain, the remove at step 2 on Peer One is concurrent with the
+add (and re-add) on Peer Two. The remove at step 2 on Peer Two is
+concurrent with the add (add re-add) on Peer One. When the sites
+exchange data and merge into a single value the remove(s) win and the
+Set is empty.</p>
+<p>Given this peculiarity, Ditto wants to enrich the types available to
+developers and offer both Add Wins and Remove Wins behavior. However,
+designing and implementing CRDTs is a difficult task, we have an
+impossibly large set of interleaving operations and orderings to test,
+and we want to be certain that the result is deterministic across them
+all. Property-Based Testing is an essential tool in the armory.</p>
+<h2 id="what-is-property-based-testing">What Is Property-Based Testing?</h2>
+<p>If you have never heard of property-based testing before watch
+<a href="https://www.youtube.com/watch?v=hXnS_Xjwk2Y">this</a>. John Hughes is
+one of the (grand?)daddies (sorry John) of property-based testing. A
+stone cold genius, he has probably saved countless millions of
+dollars, and maybe even lives since <a href="https://www.cs.tufts.edu/~nr/cs257/archive/john-hughes/quviq-testing.pdf">inventing Quickcheck with Koen
+Claessen</a></p>
+<p>There are lots of descriptions out there of property-based testing. In
+general, it means generating the test cases, usually by generating
+inputs. The programmer declares the <em>properties</em> of the thing under
+test and the library tries to generate cases that violate those
+properties. When it does find some input that violates a property, it
+will <em>shrink</em> the input into a minimal failing case. The classic
+example is that for all generated arrays as inputs, the reverse of the
+reverse of an array is equal to the original array. This is compared
+to unit testing where you make a bunch of arrays (empty?), hand
+code the result, and say &quot;expected == actual&quot;. Another common example
+is round tripping for serialisation/deserialisation libraries. That
+the result of serialise then deserialise for <em>any input</em> is the same
+as the original input is a classic property.</p>
+<h2 id="stateful-property-based-testing">Stateful Property-Based Testing</h2>
+<p>My personal favorite way of testing complex things, like distributed
+systems or distributed data-structures, is to use EQC's Statem. This
+is a stateful property-based testing module, that allows me to model
+the system under test, generate a sequence of operations to run on
+that system, and check that the system matches the model,
+throughout. If some sequence of operations leads to a difference
+between the model and the system under test (hereafter SUT),
+quickcheck shrinks the operations to a minimal sequence.</p>
+<p>With data-structures (like CRDTs) this is great. We can take an
+&quot;obviously correct&quot;, but poorly optimised implementation of a CRDT
+(like the classic <a href="https://hal.inria.fr/inria-00555588/document">Observe Remove Set</a>) and use it as the model, or
+specification, for a better implementation, like the <a href="https://lip6.fr/Marc.Shapiro/papers/RR-8083.pdf">Optimised Add
+Wins Set</a>.</p>
+<p>We execute the same randomly generated set of operations on both
+data-structures, and if there exists a difference between the behavior
+of the implementations, quickcheck will tell us, and crucially SHRINK
+the list of operations to a minimum. Then it is the programmer's job
+to decide if the bug is in the model, the SUT, the test itself, or
+some combination thereof.</p>
+<p>Every time quickcheck finds a failing counter example, you save it,
+and implement it as a unit test (for regression). Since the failing case was
+generated randomly, you cannot be certain <em>that exact case</em> will be
+generated again.</p>
+<p>It is an amazing tool. I've used it with Rustler to test Rust
+code. However, not everyone at Ditto has a licence, and not everyone
+at Ditto wants to learn Erlang. Even if I still think EQC statem is
+the gold standard, it isn't what I used for this work, but
+understanding the idea of generating a series of operations, and
+applying them to a model and a &quot;real&quot; implementation is all you need to
+take from this section.</p>
+<h2 id="poor-man-s-rust-statem">Poor Man's Rust Statem</h2>
+<p>A very basic attempt to copy the process of EQC statem would be to generate a
+list of operations, and execute them. This process is described in a few places,
+For example Tyler Neely's <a href="https://medium.com/@tylerneely/reliable-systems-series-model-based-property-testing-e89a433b360">post</a>.</p>
+<p>In this case I use Rust Proptest to generate a Vector of operations to run on a
+CRDT set. <sup class="footnote-reference"><a href="#proptest-eqc">1</a></sup></p>
+<h2 id="a-model-specification-and-a-sut">A Model (Specification) and a SUT</h2>
+<p>As a first step to supporting multiple behaviors in Ditto's document
+I looked for prior art or existing literature and found the work of
+André Rijo et al, specifically the OAR-Set in Rijo's 2018
+<a href="https://run.unl.pt/handle/10362/55171">dissertation</a> and the
+optimised version in <a href="https://arxiv.org/abs/1903.03487">this paper</a>
+(also from 2018).</p>
+<p>My idea was to use the Rijo OAR-Set as a model for the Map I was
+making.</p>
+<h3 id="remove-wins-vs-observed-add">Remove Wins vs Observed Add</h3>
+<p>In order to get a feel for the Set's semantics I implemented the
+OA-Set, the OR-Set, and the OAR-Set, testing them against each
+other using the basic model vs SUT approach described above.</p>
+<p>The Observed Add behavior was new to me. It isn't a Remove Wins in
+the sense that any remove concurrent with any add always
+wins. Instead, the Observed Add allows for the &quot;removal of removes&quot;
+that is to say in the case that re-adding something after observing
+its removal means that the remove itself will no long have an effect
+on some as yet unseen concurrent add. In a true remove wins set you
+can end up with the surprising &quot;mutual destruction&quot; of two Peers as
+described above who both:</p>
+<ol>
+<li>add element X to the set</li>
+<li>remove element X from the set</li>
+<li>re-add element X to the set</li>
+<li>merge</li>
+</ol>
+<p>In this case, with Observed Add, when Peer One re-inserts they are in
+effect saying &quot;I'm removing my remove!&quot; and so it has no effect on
+concurrent adds. If you want to learn more about <em>how</em> this is achieved,
+you should <a href="https://arxiv.org/abs/1903.03487">read the paper</a>. It is
+neat, and I wish I'd known about it before I made the Remove Wins Map!.</p>
+<p>I was surprised by the Observe Add behavior, and wanted to better
+understand it. I understand by doing, so I implemented the Optimised
+OAR-Set from the paper. Naturally I tested the Optimised version as
+the SUT against the unoptimised version as the model. I was surprised
+to see they diverged.</p>
+<h2 id="the-test-a-counter-example">The Test; A Counter Example</h2>
+<p>The state of the system is modeled as a <code>BTreeMap&lt;usize, (Model, SUT)&gt;</code> where
+the key <code>usize</code> is a &quot;peer&quot; in the distributed system.</p>
+<p>The operations that the test performs on the system are:</p>
+<pre data-lang="rust" style="background-color:#eff1f5;color:#4f5b66;" class="language-rust "><code class="language-rust" data-lang="rust"><span>    </span><span style="color:#b48ead;">enum </span><span>SetOp {
+</span><span>        Replicate { src_peer: </span><span style="color:#b48ead;">usize</span><span>, dst_peer: </span><span style="color:#b48ead;">usize </span><span>},
+</span><span>        Insert { peer: </span><span style="color:#b48ead;">usize</span><span>, elem: </span><span style="color:#b48ead;">u64 </span><span>},
+</span><span>        Remove { peer: </span><span style="color:#b48ead;">usize</span><span>, elem: </span><span style="color:#b48ead;">u64 </span><span>}, </span><span style="color:#a7adba;">// this is the remove wins remove
+</span><span>        ObserveRemove { peer: </span><span style="color:#b48ead;">usize</span><span>, elem: </span><span style="color:#b48ead;">u64 </span><span>}, </span><span style="color:#a7adba;">// this is the add wins remove
+</span><span>    }
+</span></code></pre>
+<p>The test generates a sequence of operations: a mutation operation happens at a
+site, and replication merges the data <em>from</em> the first site <em>to</em> the second.
+This models the replication of data from one site to another. Without any
+distributed systems, networks, databases, replication protocols, threads or
+parallelisation, we have a very basic but effective model of a distributed system.
+Each operation is a step, or moment in time. We have a single set. We allow
+concurrent updates to it. We arbitrarily replicate between pairs of sites.</p>
+<p>After all operations are applied, we merge all sites into a single
+value. This is the guarantee of <a href="https://www.allthingsdistributed.com/2007/12/eventually_consistent.html">eventual
+consistency</a>:
+when the system is quiescent (<em>i.e.</em>, all peers have seen all operations)
+there is a single common value. At each merge we check that the model
+and SUT match, and at the end, when ALL sites are merged, we check
+again that the model and SUT match.</p>
+<p>Proptest found a failing case and kindly shrank the failing case down
+to:</p>
+<pre data-lang="rust" style="background-color:#eff1f5;color:#4f5b66;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#b48ead;">let</span><span> shrunk_ops = vec![
+</span><span>    </span><span style="color:#a7adba;">// Peer Zero inserts 0 ⇒ [0]
+</span><span>    SetOp::Insert { peer: </span><span style="color:#d08770;">0</span><span>, elem: </span><span style="color:#d08770;">0 </span><span>},
+</span><span>    </span><span style="color:#a7adba;">// Peer Zero does a remove wins remove of 0 ⇒ []
+</span><span>    SetOp::Remove { peer: </span><span style="color:#d08770;">0</span><span>, elem: </span><span style="color:#d08770;">0</span><span>),
+</span><span>    </span><span style="color:#a7adba;">// Peer Zero replicates to Peer Two ⇒ []
+</span><span>    SetOp::Replicate { src_peer: </span><span style="color:#d08770;">0</span><span>, dst_peer: </span><span style="color:#d08770;">2 </span><span>},
+</span><span>    </span><span style="color:#a7adba;">// Peer Two (re)-adds (and has observed the remove wins remove (in OARSet this &quot;removes the remove&quot;)) ⇒ [0]
+</span><span>    SetOp::Insert { peer: </span><span style="color:#d08770;">2</span><span>, elem: </span><span style="color:#d08770;">0 </span><span>},
+</span><span>    </span><span style="color:#a7adba;">// Peer One inserts 0 (it has _not_ seen the earlier remove) ⇒ [0]
+</span><span>    SetOp::Insert { peer: </span><span style="color:#d08770;">1</span><span>, elem: </span><span style="color:#d08770;">0 </span><span>},
+</span><span>    </span><span style="color:#a7adba;">// Peer Two observe removes 0 ⇒ []
+</span><span>    SetOp::ObserveRemove { peer: </span><span style="color:#d08770;">2</span><span>, elem: </span><span style="color:#d08770;">0 </span><span>},
+</span><span>];
+</span></code></pre>
+<p>At some step the test failed because the model value was <code>[0]</code> and the
+SUT was <code>[]</code>.</p>
+<h2 id="the-difference">The Difference</h2>
+<p>The job of the programmer is now to figure out <em>why</em> the model and the
+SUT diverge. In this case I had a hunch, so I augmented my test to
+merge the final state in all possible permutations, and this showed
+that in some orderings the final sets matched.</p>
+<p>If we start by merging Peer One into Peer Zero, and then merge Peer
+Two into the result (<em>i.e.</em> <code>(Peer Zero &lt;- Peer One) &lt;- Peer Two</code>) the
+divergence happens when Peer Two is merged into the result of the merge of
+Peer One into Peer Zero. This is because when we merge Peer One into
+Peer Zero, we <em>lose</em> the <code>0</code> element from the set. Peer One still has
+the Observe Add tombstone (recall that it was <em>Peer Two</em> that removes
+the remove by re-adding <code>0</code> to the set.) The tombstone at Peer Zero
+acts on the element on Peer One.</p>
+<p>In the optimised specification a remove ACTUALLY REMOVES the element;
+it is forgotten (that's part of the optimisation). When we then merge
+Peer Two, the unoptimised set still has the element <code>0</code> in the set,
+and notices that the tombstone itself was &quot;removed&quot; by the re-add at
+Peer Two, and so the add on Peer One becomes concurrent with the
+<code>observe remove</code> on Peer Two (Observe Remove <em>means</em> Add Wins).</p>
+<p>Well done property testing! The paper passed review and was accepted
+in the national informatics conference INForum 2018, but a six-step
+run with 3 peers shows the specs don't match. That isn't a critique of
+the work or the scientific process, but rather an endorsement of the power
+of stateful property-based testing.</p>
+<p>Not only do the specs not match, it also shows that the spec for the
+Optimised OAR-Set is not actually a CRDT, as a State-based CRDT's
+Merge function must be idempotent, commutative, and associative. For
+example, if we merge the Peers in the order <code>(Peer Two &lt;- Peer Zero)&lt;- Peer One</code>
+then the SUT matches the model.</p>
+<h2 id="the-fix">The Fix?</h2>
+<p>I wanted to fix it for the sake of the blog post, and for my own
+understanding. I'm not sure my fix is great, as it isn't really in the
+<em>spirit</em> of &quot;optimised.&quot; My changes are in <code>merge</code> and <code>lookup</code> of the
+spec.</p>
+<p>In <code>merge</code> we <em>never</em> remove/forget a value from the <code>Add</code> set, even
+if it appears to be tombstoned by the merge. In <code>lookup</code> merely being
+present in the <code>Add</code> set with timestamps is no longer enough, the
+element must also <em>NOT</em> be present in the <code>Remove</code> map. That's it. Now
+they match, the property test passes, and the Set <em>is</em> a CRDT.</p>
+<h1 id="conclusion">Conclusion</h1>
+<p>I contacted André Rijo and Nuno Preguiça about this work, and they
+were generous of their time in discussing it with me, agreeing that
+I had found a genuine issue in the paper: that the optimised
+specification does not match the OARSet specification.</p>
+<p>Deletes in distributed systems are hard, and the Observed Add semantic
+from these papers is a valuable alternative to the harsher Remove Wins
+behavior.</p>
+<p>This posts illustrates just how hard it is to make correct CRDTs, and
+why tools like Stateful Property-Based Testing are so valuable.</p>
+<p>Look out for the new types coming soon to the Ditto Platform.</p>
+<div class="footnote-definition" id="proptest-eqc"><sup class="footnote-definition-label">1</sup>
+<p>There is a <a href="https://github.com/AltSysrq/proptest/pull/257">PR</a> open on Proptest that adds EQC Statem-like features to Proptest. 🤞</p>
+</div>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

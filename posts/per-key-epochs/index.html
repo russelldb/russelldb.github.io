@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html class="dark light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Per-Key Actor Epochs In Riak
+        
+    </title>
+
+        
+            <meta property="og:title" content="Per-Key Actor Epochs In Riak" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://wombat.me/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="" href="https://wombat.me/atom.xml">
+
+
+    
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://wombat.me/main.css />
+
+    
+
+    <script src=https://wombat.me/js/feather.min.js></script>
+</head>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;wombat.me></a>
+
+        <div class="socials">
+            
+            <a rel="me" href="https:&#x2F;&#x2F;github.com&#x2F;russelldb" class="social">
+                <img alt=GitHub src="/social_icons/github.svg">
+            </a>
+            
+        </div>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F; style="margin-left: 0.7em">Home</a>
+        
+    </nav>
+
+    
+</header>
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Per-Key Actor Epochs In Riak<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2015-12-31</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h1 id="per-key-actor-epochs-in-riak">Per-Key Actor Epochs In Riak</h1>
+<p><a href="../dvv">Last time</a>
+I wrote about how Dotted Version Vectors fix Sibling
+Explosion. Sibling Explosion was relatively common bug, often seen in
+the wild. This post is about a subtle bug that manifests in a number
+of different ways, but all have the same result: silent data
+loss. Don't panic, we believe this to be a very uncommon edge case,
+and it is now fixed in Riak &gt;= 2.1.</p>
+<p>In order for the bug to occur we need a complex interplay of features,
+so this post will have to cover Deletes, Read Repair and Handoff in
+Riak.</p>
+<p>The bug itself is very similar to the requirement to Read Your Own
+Writes for Client Version Vectors, so if you haven't read
+<a href="../vnode-vclocks">part one</a>
+now is a good time to do so.</p>
+<h2 id="why-ryow-again">Why RYOW, again?</h2>
+<p>If you recall, an actor in a version vector must increment it's
+counter each time it updates a value. If an actor can not read it's
+own latest update in the version vector, it cannot issue a new event
+that is certain to be larger than the last. The first post in this
+series showed how this can lead to data loss. But how can it be that
+some vnode (as actor) could fail to read it's own last write, isn't a
+vnode where the database stores data? The simplest answer is: deletes.</p>
+<h2 id="deletes-are-hard">Deletes are hard</h2>
+<p>Before moving on we are going to have to have a least a passing
+understanding of how deletes in Riak work. Deletes are hard in an
+eventually consistent distributed system. Riak allows concurrent
+writes to the same value, and it also allows a value to be
+concurrently deleted and updated. Which operation &quot;wins&quot;? As with
+concurrent updates to a key, version vectors arbitrate. You can read
+more about
+<a href="http://docs.basho.com/riak/latest/ops/advanced/deletion">deletes in the Riak documentation</a>,
+but this post will cover what is needed to understand the bug.</p>
+<h3 id="tombstones">Tombstones</h3>
+<p>Rather than physically deleting a key, we can logically delete it. We
+read the key and get it's version vector, and write a special
+tombstone value back to Riak with the version vector as a context. A
+delete then behaves like any other write. If the key was concurrently
+updated, the version vector detects this, and the tombstone and
+updated value become siblings. If there was no concurrent update only
+the tombstone is recorded on disk. A request to read a key that only
+has a tombstone value will return <strong><code>not_found</code></strong> as Riak understands
+tombstones to mean logical deletion. A
+<a href="http://docs.basho.com/riak/latest/ops/advanced/deletion/#Client-Library-Examples">client</a>
+can also ask Riak for the &quot;deleted vclock&quot; on a get, to ensure that a
+new write supersedes a tombstone.</p>
+<h3 id="reaping-i-want-my-disk-space-back">Reaping: I want my disk space back!</h3>
+<p>Disks are cheap and disks are big, but they're neither free nor
+infinitely large, and customers would like to see the deletion of
+values reflected in increased disk space (I know! Crazy!) Even if a
+tombstone is just a version vector and a small special value actual
+removal of the key data is a requirement. The process by which Riak
+reclaims space is called tombstone reaping. It's reasonably complex:</p>
+<ol>
+<li>Client issues <strong><code>delete</code></strong> command</li>
+<li>Riak writes special <strong><code>tombstone</code></strong> with Version Vector</li>
+<li>Riak internally performs a <strong><code>GET</code></strong> on the key, with the <a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Quorum">quorum</a> value set to <strong><code>all</code></strong> (which means &quot;ask all the replicas for the value, please.&quot;)</li>
+<li>If the result of the get is a tombstone AND all vnodes that reply are <a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Sloppy-Quorum">primaries</a> the
+vnodes are told they may physically remove the key</li>
+<li>The vnode will read the key, check it is a tombstone, and check the <strong><code>delete_mode</code></strong>
+and finally delete the tombstone.</li>
+</ol>
+<p>Step 4 above amounts to Riak declaring unanimously that all primary
+replicas agree on a tombstone value before issuing the final delete
+that reaps the tombstone.</p>
+<p>What is <strong><code>delete_mode</code></strong> as mentioned in step 5? It is a setting which can be one of</p>
+<ul>
+<li>keep - never delete the tombstone</li>
+<li>immediate - remove the tombstone at once</li>
+<li>integer - remove the tombstone after some time, eg 3 seconds</li>
+</ul>
+<p>Read
+<a href="http://docs.basho.com/riak/latest/ops/advanced/deletion/#Configuring-Object-Deletion">the documentation</a>
+for more details. I'll cover these settings as they pertain to the bug
+later.</p>
+<p>Clearly deletes are hard. The summary though is that Riak needs to see
+all primary replicas agreeing on a logical delete before a physical
+delete is considered.</p>
+<h2 id="read-repair">Read Repair</h2>
+<p>As mentioned in the introduction the process of
+<a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Read-Repair">Read Repair</a>
+has a part to play.</p>
+<p><a href="http://docs.basho.com/riak/latest/theory/concepts/Replication/#Read-Repair">Read repair</a>
+is an opportunistic anti-entropy mechanism. When a client reads data
+from Riak, each replica responds with it's local copy. Using the
+Version Vector Riak can detect when some replica is behind, or in
+conflict, and send the most up-to-date value to that replica. The
+replica then stores the correct value. It is a curious fact that <em>all</em>
+the replying vnodes may need read repair as the &quot;most up-to-date
+value&quot; could be the result of <em>merging</em> all the responses. Imagine,
+for example, 3 clients each writing a different value, concurrently,
+to 3 vnodes.</p>
+<h2 id="hand-off">Hand Off</h2>
+<p><a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Hinted-Handoff">Hand Off</a>
+is a process that restores data after some failure or
+<a href="https://queue.acm.org/detail.cfm?id=2655736">network partition</a>.</p>
+<p>If the node <strong><code>A</code></strong> that some key <strong><code>X</code></strong> should be stored on is unavailable
+when a client wishes to write <strong><code>X</code></strong> some other node <strong><code>A'</code></strong> will step in
+and handle that write as a <em>fallback</em>. When the node <strong><code>A</code></strong> is available
+again then the fallback node will <em>hand off</em> any data it stored. All
+this means is node <strong><code>A'</code></strong> sends any data that it stored for node <strong><code>A</code></strong>
+back to node <strong><code>A</code></strong>. Of course the magic of Version Vectors is how node
+<strong><code>A</code></strong> knows if it should add node <strong><code>A'</code></strong> data as a sibling, discard it,
+or overwrite it's local data.</p>
+<h2 id="doomstones">Doomstones</h2>
+<p>Finally we have all the knowledge we need to understand the issue.</p>
+<p>The example I'm going to use has deletes and read repair and fallbacks
+in. It's a reasonably complex example, but one that has been seen in
+the wild.</p>
+<p>A client decides to delete key <strong><code>X</code></strong>. It reads key <strong><code>X</code></strong> and gets the Version Vector</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">2</span><span>}]
+</span></code></pre>
+<p>Which means that actor <strong><code>A</code></strong> has issued two updates to <strong><code>X</code></strong>. The Client
+sends the delete command and version vector to Riak. Riak creates a
+<strong><code>tombstone</code></strong> value and writes it. However, only primary nodes <strong><code>A</code></strong> and
+<strong><code>B</code></strong> are available, node <strong><code>C</code></strong> appears offline, maybe some congestion at
+a network switch, or some other problem. Maybe an operator took <strong><code>C</code></strong>
+offline to replace a faulty NIC. Whatever, node <strong><code>C'</code></strong> handles the write
+of the tombstone as a <em>fallback</em>. The client is notified the delete
+succeed, and its part is done.</p>
+<p>Our cluster is in this state: the <strong><code>tombstone</code></strong> is on <strong><code>A</code></strong>  <strong><code>B</code></strong>  and
+<strong><code>C'</code></strong>. As stated above, Riak now performs a <strong><code>GET</code></strong> operation to see if
+all primaries unanimously agree on the tombstone value. By now <strong><code>C</code></strong> is
+back online and returns <strong><code>not_found</code></strong>. It's OK, <em>Read Repair</em> kicks in,
+and sends the tombstone to <strong><code>C</code></strong>.</p>
+<p>Now our cluster has the tombstone on <strong><code>A</code></strong>  <strong><code>B</code></strong>  <strong><code>C</code></strong> and <strong><code>C'</code></strong>. A read to
+key <strong><code>X</code></strong> occurs. The client receives a <strong><code>not_found</code></strong>  and since all nodes
+have the tombstone, and all are primaries, the <em>reap</em> logic is run.</p>
+<p>Nodes <strong><code>A</code></strong>  <strong><code>B</code></strong>  and <strong><code>C</code></strong> remove the tombstone. A client writes a new
+value for <strong><code>X</code></strong>. Node <strong><code>A</code></strong> coordinates. The new value ends up with the
+Version Vector.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>This would be fine, except lingering on that fallback node <strong><code>C'</code></strong> is a
+tombstone with the version vector</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">2</span><span>}]
+</span></code></pre>
+<p>Handoff kicks in, <strong><code>C'</code></strong> sends its value to <strong><code>C</code></strong>. Node <strong><code>C</code></strong> looks at its
+local Version Vector for key <strong><code>X</code></strong>  sees that the incoming hand-off
+value dominates it, and writes the tombstone.</p>
+<p>Later, a read will cause read repair to spread the tombstone to nodes
+<strong><code>A</code></strong> and <strong><code>B</code></strong>. The tombstone <em>looks</em> like it is from a later causal
+time, but it's actually from an earlier time. The tombstone has
+managed to silently delete the new value of key <strong><code>X</code></strong>  which is bad.</p>
+<p>This example is convoluted but the essence of the problem is much like
+the RYOW problem from part 1. If a vnode forgets the version vector
+for a key (say by deleting the key) then it re-issues some event, in
+this case <strong><code>{A, 1}</code></strong>.</p>
+<p>In this case the answer could be as simple as use <strong><code>delete_mode = keep</code></strong>. But that's not the whole answer.</p>
+<h2 id="fault-tolerant">Fault Tolerant?</h2>
+<p>There are other ways for this issue to manifest. In the real world
+disk errors occur. If your database is a replicated, fault tolerant
+database, and it gets an error from a disk, should it fail a write
+operation? When a Riak vnode can't read a local value for a key, it
+treats the value as <strong><code>not_found</code></strong>  after all, there are <strong><code>n</code></strong> replicas of
+the data, a write shouldn't fail if one is lost.</p>
+<p>Turns out this can be bad, too. Failing to read the local version
+vector for <em>whatever</em> reason leads to a new version vector being
+created for the key. Imagine some key <strong><code>X</code></strong> is on replicas <strong><code>A</code></strong>  <strong><code>B</code></strong>  and
+<strong><code>C</code></strong> with version vector</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">3</span><span>}, {</span><span style="color:#bf616a;">B</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#bf616a;">C</span><span>, </span><span style="color:#d08770;">5</span><span>}]
+</span></code></pre>
+<p>For <em>whatever</em> reason, a coordinating write on node <strong><code>A</code></strong> fails to read
+<strong><code>X</code></strong>. Solar flare, disk error, operator removes the data directory 'cos
+&quot;3 replicas, it's OK!&quot;, <em>anything</em>. At this point we assign the
+Version Vector</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>To the new write. When it reaches replicas <strong><code>B</code></strong> and <strong><code>C</code></strong> they will
+discard the new value as &quot;already seen&quot;. Next Read Repair will cause
+<strong><code>A</code></strong> to remove the value too. Same outcome (silent data loss), and from
+a similar case: a vnode failing to read its own writes.</p>
+<h2 id="epochs-is-the-answer">Epochs is the answer</h2>
+<p>As with so many things, the answer is conceptually very simple, but
+the engineering a little harder.</p>
+<p>In each of the cases above, and other more complex manifestations of
+the issue, the problem arises when a local <strong><code>not_found</code></strong> leads to the
+creation of a new Version Vector when an older one from a <em>later
+logical time</em> still exists in the system.</p>
+<p>One possible answer is to have an <em>Epoch</em> for each key. When key <strong><code>X</code></strong>
+is created the <em>first</em> time call that &quot;Epoch 1&quot;. Then, if later it is
+deleted, and re-created the new <strong><code>X</code></strong> will be in &quot;Epoch 2.&quot; If some
+replica has key <strong><code>X</code></strong> in Epoch 1 and we try and compare it with Epoch 2,
+we can ensure that Epoch 1's Version Vector at <strong><code>[{A, 3}]</code></strong> does not
+dominate Epoch 2's Version Vector at <strong><code>[{A, 1}]</code></strong></p>
+<p>In practical terms this means that whenever some vnode gets a local
+<strong><code>not_found</code></strong> when coordinating a write, it creates a new epoch for that
+key. Why might a vnode get a local <strong><code>not_found</code></strong>? As above, maybe a
+delete, maybe disk error, maybe operator error. Maybe this key has
+<em>never</em> been written before. It doesn't matter. A local <strong><code>not_found</code></strong>
+means a new Epoch for the key.</p>
+<h3 id="does-epoch-two-dominate-epoch-one">Does Epoch Two Dominate Epoch One?</h3>
+<p>NO! We've already seen an example above where Epoch 1 and 2 contain
+siblings. So what do we do then? How do we merge a clock like</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#bf616a;">B</span><span>, </span><span style="color:#d08770;">4</span><span>}]
+</span></code></pre>
+<p>From Epoch 1 with one like</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>From Epoch 2?</p>
+<h3 id="per-key-actor-epochs">Per Key Actor Epochs</h3>
+<p>Instead of having an epoch per key, we have an actor epoch per
+key. Each vnode keeps a counter. Every time the vnode gets a local
+<strong><code>not_found</code></strong> when coordinating a write it increments it's counter and
+<em>for that key only</em> creates an actor ID from the pair of values <strong><code>vnode id</code></strong> and <strong><code>counter</code></strong>. This means that every time a key is (re)created it
+gets a unique actor ID. This turns the clocks above into the pair:</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>:</span><span style="color:#d08770;">1</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#bf616a;">B</span><span>, </span><span style="color:#d08770;">4</span><span>}]
+</span><span>    [{</span><span style="color:#bf616a;">A</span><span>:</span><span style="color:#d08770;">2</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>Meaning we <em>can</em> merge the clocks into a single version vector, and we
+can treat as concurrent the values assigned to each clock. No more
+silent data loss. We consider the pair <strong><code>A:N</code></strong> as a single actor ID, thus
+each vnode gets a per-epoch-id for each key without having a general
+explosion in the number of actors in the system. This scheme isolates
+the growth of actors to individual keys.</p>
+<p>In the tombstone example above, the new Version Vector for the
+re-created 'X' key would be <strong><code>[{A:2, 1}]</code></strong> and would therefore conflict
+with the &quot;doomstone&quot; version vector. This ensures the new value
+survives. Is this <em>strictly</em> correct? No! Ideally in the &quot;doomstone&quot;
+case the new epoch would dominate, but in the local fail to read case,
+the new epoch would be concurrent. But in either case no data is lost
+with this scheme.</p>
+<p>This scheme has the benefit of being entirely backwards compatible and
+requiring no logical changes elsewhere in Riak: all Version Vector
+logic remains the same.</p>
+<h3 id="updating-a-version-vector">Updating A Version Vector</h3>
+<p>How does the vnode <strong><code>A</code></strong> update it's entry in the Version Vector now? It
+finds the entry <strong><code>A:N</code></strong> for the highest <strong><code>N</code></strong> in the Version Vector and
+updates that.</p>
+<h4 id="mechanics">Mechanics</h4>
+<p>It turns out keeping a simple, durable, strictly increasing counter is
+not so simple. In order to work no pair <strong><code>vnode id:counter</code></strong> can ever be
+used twice for a new key. Which means the counter must be
+durable. Durable data is expensive, as this
+<a href="https://www.usenix.org/node/186195">talk</a> illustrates. In Riak each
+vnode uses a leased counter approach. At a configurable interval each
+vnode will asynchronously flush a lease (say 10k) to disk, and will
+continue to increment it's counter up to that ceiling. As the ceiling
+approaches, the vnode will store a new value (+10k) to disk, and
+continue to issue new writes. If the vnode should be restarted or
+crash between flushes it reads the ceiling value as the starting point
+and creates a new lease from there. This ensures that a vnode never
+res-uses a counter value. The size of the lease, and therefore
+frequency of flushing/leasing is a configurable parameter.</p>
+<h2 id="summary">Summary</h2>
+<p>In this series of blog posts we've gone from 1970s seminal works to
+modern academic/industry collaboration. We've seen how one of the
+simplest and most venerable data structures in computer science can be
+complex and error prone in the real world, and how even the classics
+can be improved with some necessary innovation for time to time.</p>
+<p>If you've read the whole series, thank you! You're fully caught up
+with logical clocks in Riak from back in client-side vclock days to
+the present world of per-key-actor-epoch-vnode-dotted-version-vectors!</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

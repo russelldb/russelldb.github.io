@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html class="dark light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Ditto&#x27;s Delta State CRDT
+        
+    </title>
+
+        
+            <meta property="og:title" content="Ditto&#x27;s Delta State CRDT" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://wombat.me/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="" href="https://wombat.me/atom.xml">
+
+
+    
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://wombat.me/main.css />
+
+    
+
+    <script src=https://wombat.me/js/feather.min.js></script>
+</head>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;wombat.me></a>
+
+        <div class="socials">
+            
+            <a rel="me" href="https:&#x2F;&#x2F;github.com&#x2F;russelldb" class="social">
+                <img alt=GitHub src="/social_icons/github.svg">
+            </a>
+            
+        </div>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F; style="margin-left: 0.7em">Home</a>
+        
+    </nav>
+
+    
+</header>
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Ditto&#x27;s Delta State CRDT<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2023-09-19</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <p><strong>This post was originally written for and published on the <a href="https://ditto.live/blog/dittos-delta-state-crdts">Ditto Blog</a>.</strong></p>
+<p>A <a href="https://crdt.tech">CRDT</a> (Conflict-free Replicated Data Type) is data structure that can be used in a distributed system to enable concurrent updates to data.</p>
+<p>In <a href="../testing-crdts">my last post</a> I wrote about using stateful property-based testing to validate Ditto's CRDTs. My motivation for such testing was the need to design and implement a new CRDT for Ditto's Mesh database.</p>
+<p>When writing about that new CRDT I realised that I first needed to write about the Delta based replication of Ditto's CRDTs.</p>
+<h3 id="why-build-a-state-based-crdt">Why build a State-based CRDT?</h3>
+<p>Operation-based CRDTs are more commonly used in the applications you are familiar with.  This is because operations are great for long-running connections with temporary interruptions, and a defined set of peers. Think server-coordinated apps like Figma, where individual users are invited to a document via their web browser. This requires that there exists some notion of <em>all</em> peers, which is incompatible with an ad hoc mesh, where peers can leave and join, recombine, make sub-meshes, and be disconnected for arbitrary periods of time. Defining &quot;everyone&quot; that exists in an ad hoc mesh is an open research area.</p>
+<p>Due to the frequent offline operation, and ad hoc nature of membership, state based CRDTs are a more suitable answer for Ditto's mesh. Operation-based CRDTs offer smaller local state but require far more from the channels by which operations are delivered. For example, an operation based counter requires exactly once delivery to every peer. Operation-based CRDT maps require causal delivery to every peer. When a peer performs a series of operations over a single, or multiple documents, these operations must all be delivered in a causally consistent manner to each and every peer. Causally consistent means that if some change happens after or because of some prior change, the later change <em>must never</em> be observed without the former. Causality describes a chain of dependencies that must not be broken.</p>
+<p>For the sake of giving an intuition about causal consistency, imagine the following scenario:
+On a social network Bob posts a message:</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Bob: &quot;I lost my cat&quot;`
+</span></code></pre>
+<p>Then after some time, he posts:</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Bob: &quot;I found him! What a relief!&quot;`
+</span></code></pre>
+<p>To which Sue replies:</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Sue: &quot;Great news!&quot;
+</span></code></pre>
+<p>In an eventually consistent system these messages can be delivered in any order, so we might see</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Bob: &quot;I lost my cat&quot;
+</span><span>Sue: &quot;Great news!&quot;
+</span><span>Bob: ...etc
+</span></code></pre>
+<p>Causal Consistency ensures that if a new message is written after seeing some prior message, then the new message is not visible unless that prior message is also visible.
+To help differentiate Causal Consistency from stronger consistency models, imagine also that Alice replies to Bob’s good news with:</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Alice: &quot;Wonderful!&quot;
+</span></code></pre>
+<p>Causal Consistency allows the two concurrent messages “Great news!” from Sue and “Wonderful!” from Alice can be shown in any order. Both:</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Bob: &quot;I lost my cat&quot;
+</span><span>Bob: &quot;I found him! What a relief!&quot;
+</span><span>Sue: &quot;Great news!&quot;
+</span><span>Alice: &quot;Wonderful!&quot;
+</span></code></pre>
+<p>And:</p>
+<pre style="background-color:#eff1f5;color:#4f5b66;"><code><span>Bob: &quot;I lost my cat&quot;
+</span><span>Bob: &quot;I found him! What a relief!&quot;
+</span><span>Alice: &quot;Wonderful!&quot;
+</span><span>Sue: &quot;Great news!&quot;
+</span></code></pre>
+<p>are allowed with Causal Consistency.
+Ditto provides this causal consistency not just <em>within</em> documents, but across documents.</p>
+<p>Additionally, operation-based CRDTs require some form of external ordering and buffering. Operations cannot be forgotten by the system until they have been delivered to all peers. If we consider a log of operations, only when all peers have seen the operations can they be removed from the log. This is easy to say but hard to do.</p>
+<p>State-based CRDTs place far fewer constraints on the channel by which data is replicated. All that is required is that eventually all data reaches all peers.</p>
+<p>State-based CRDTs have merge functions that are idempotent, associative and commutative, meaning that the channel can reorder messages, and redeliver the same message many times, and the resulting data still converges. Being immune to re-order and redelivery means dropped messages don't matter either, as sending the same message multiple times is safe.</p>
+<h2 id="storage-who-has-what-data">Storage – who has what data?</h2>
+<p>A typical problem in peer-to-peer is how to store and retrieve data across devices with varying storage (think mobile phones and raspberry pis) and availability. Keeping a local database may not be enough to have the full scope of history, especially in peer to peer applications.</p>
+<p>Additionally, in a centralized application, it is assumed that the owner will prioritize backing up all your data. If there was some natural disaster at one of Google’s data centers, for example, they have a variety of backups of your data in various locations around the world. But if users expect long-term storage across the world’s data centers, your peer-to-peer distributed database needs to provide timely information about status and availability of that data, either on a raspberry pi or a cloud service.
+To solve this problem, Ditto provides two versions of peers: a small peer, and a big peer. The database runs in the cloud (Big Peer) and on devices (Small Peer). The Small Peers create an Ad-Hoc Mesh of connected devices, and opportunistically replicate data to Big Peers whenever the internet is available.</p>
+<h3 id="the-crdt">The CRDT</h3>
+<p>Ditto Small Peers each have a local database which stores documents. The document is a <a href="https://dl.acm.org/doi/abs/10.1145/2596631.2596633">CRDT Map</a>, where keys in the map can be thought of as properties of a JSON document. Each key points to a value that is itself a CRDT. The CRDTs inside a Ditto Document are:</p>
+<ul>
+<li>Last Write Wins Register</li>
+<li>Counter</li>
+<li>CRDT Map</li>
+</ul>
+<p>The root of the Ditto Document is a CRDT Map, which makes the document a nested, recursive structure. You can think of it as a tree made up of data and metadata. A JSON document can be represented as a tree of maps, with the leaf values in registers or counters.</p>
+<p><img src="https://wombat.me/posts/diffs/./map-tree.png" alt="A Ditto CRDT Map is a Tree" /></p>
+<h3 id="mesh-subscriptions-replication">Mesh, Subscriptions, Replication</h3>
+<p>A Small Peer Application is a partial replica of the total Ditto database. A Small Peer <em>subscribes</em> to data via a query. When any pair of peers connect they exchange subscriptions. Any data on one peer that matches the subscription of the other is replicated. A key property of Ditto is that in a mesh of connected small peers with the same subscription, all peers must &quot;eventually&quot; have the same data.</p>
+<h3 id="crdts-and-mesh-consistency">CRDTs and Mesh Consistency</h3>
+<p>&quot;Eventually&quot; describes the asynchronous, ad-hoc nature of the mesh and its connections. We can say that &quot;eventually&quot; means when the system is quiescent. The system is quiescent when every peer has stopped making changes, and has received every change made by every other peer. The system never has to literally reach quiescence for the property to hold: quiescence is just a way to think about &quot;eventually&quot;. It describes a property where there is <em>convergence</em> of the data. The system constantly works towards convergence by replicating data between peers.</p>
+<p>If we imagine three small peers, each with all networks turned off, they can all edit the data in their local documents freely. When they turn on the network and connect to each other, the changes will be replicated between the peers, and all will have the same value locally: this is convergence. The example also shows <em>eventually</em> they share a common, consistent view of the data. CRDTs enable this ability to <em>always</em> make progress locally by editing the CRDT, even when no connection is possible. CRDTs detect concurrent edits and converge to a single consistent value.</p>
+<h3 id="delta-state-vs-full-state">Delta State Vs Full State</h3>
+<p>One downside of state based CRDTs is that traditionally the <em>full state</em> of each CRDT must be replicated. With a large document that has only one or two frequently updated properties this is wasteful.</p>
+<p>The introduction of <a href="https://arxiv.org/abs/1603.01529">Delta State CRDTs</a> showed that there is a way to replicate <em>only deltas</em> or differences in state, rather than the full state. However this can
+bring a similar set of channel constraints as Operation-based CRDTs. For example, a device must store a buffer of deltas to send to its peers. It cannot truncate this buffer until all peers have received some stable prefix. Again, these deltas are suited to mostly-connected systems, with infrequent changes in membership.</p>
+<p>At Ditto we developed a different approach: diffs. Diffs combine the minimal representation of deltas with the advantage of not requiring a buffer per peer in the system. (We later learned of a
+<a href="https://dl.acm.org/doi/10.1145/2911151.2911163">paper</a> that describes a similar technique.)</p>
+<h3 id="diffs-are-deltas">Diffs (are Deltas)</h3>
+<p>Another way to avoid sending full state is to calculate the minimal state needed to bring a peer up-to-date.</p>
+<h4 id="version-vectors-and-dots">Version Vectors and Dots</h4>
+<p>State-based CRDTs require some kind of logical clock. Logical clocks can capture the causal relationship between updates. Ditto uses Version Vectors, which enable the tracking of causality at the document level. They allow the system to detect if an update on Peer A comes after, before, or is concurrent with an update on Peer B. A version vector has a counter for each peer. The peer updates its own counter every time an edit event occurs. Ditto uses
+<a href="https://link.springer.com/chapter/10.1007/978-3-319-14472-6_2">Hybrid Logical Clocks (hlc)</a> for counters, they play the dual role of temporal clocks and logical counters.</p>
+<p>There are a lot of reasons why temporal time is not a great way to order updates and detect concurrency within a system of connected peers in a distributed system (see
+<a href="https://dl.acm.org/doi/10.1145/359545.359563">Lamport</a>, or the
+excellent summary <a href="https://queue.acm.org/detail.cfm?id=2745385">There Is No Now</a> by Justin Sheehy.)</p>
+<p>Each Ditto Document has a Version Vector:</p>
+<p><img src="https://wombat.me/posts/diffs/./version-vectors-sm.png" alt="Version Vectors" /></p>
+<p>Ditto's replication protocol uses version vectors to keep peers in sync. As an illustrative simplification:</p>
+<ul>
+<li>Peer A and Peer B are subscribed to Document 1</li>
+<li>Peer A sends the Version Vector to Peer B</li>
+<li>Peer B looks at its own Version Vector for Document 1</li>
+<li>If the version vectors indicate that Peer B has information in
+Document 1 that Peer A does not, Peer B builds a Diff for Peer A</li>
+<li>The Diff is sent to Peer A and Peer A integrates the changes</li>
+<li>If Peer B now does the same, both peers will have the same data (convergence).</li>
+</ul>
+<p>Ditto is able to build a Diff thanks to the structure of the CRDT
+Map. Inspired by the Riak DT Map, it is a tree with some causal
+metadata (dots) at each node that indicate the latest updates to that
+node.</p>
+<p>An event is an edit to a document. A dot is a single event in a version vector. For example, the Version Vector <strong><code>[(actor_1, 3), (actor_3, 2)]</code></strong> summarizes the events <strong><code>(actor_1, 1)</code></strong>, <strong><code>(actor_1, 2)</code></strong>,
+<strong><code>(actor_1, 3)</code></strong>, <strong><code>(actor_2, 1)</code></strong>, and <strong><code>(actor_2, 2)</code></strong>. In fact at Ditto the Rust module for a Version Vector is called a <strong><code>Summary</code></strong>. When the document is edited we tag the tree structure with a dot for that event. This is more metadata (that compresses really well) <em>but</em> it allows for efficient generation and merging of diffs.</p>
+<p>A Dot or Event is observed, or seen by some Version Vector if the counter value in the dot is less than or equal to the counter value for that actor in the Version Vector. For example the dot <strong><code>(actor_a, 1)</code></strong> is seen by the Version Vector <strong><code>[(actor_a, 3), (actor_b, 2)]</code></strong> but the dot <strong><code>(actor_b, 3)</code></strong> has not been seen.</p>
+<p><img src="https://wombat.me/posts/diffs/./dots-sm.png" alt="Dots are events" /></p>
+<h4 id="calculating-diffs">Calculating Diffs</h4>
+<p>Diff generation involves walking the tree from the root. If the root metadata is not covered by the remote version vector, consider the properties at the next level. If any properties are tagged with events that are unseen by the remote version vector, walk down until either a leaf is reached, or a node that has already been observed is reached.</p>
+<p>The diff is the unseen leaf data and the paths through the tree to that leaf data.</p>
+<p>This is best explained by the illustration below where Peer A and Peer E both subscribe to a document. In this illustration the event tags on the nodes of the tree can be seen. Where multiple peers concurrently update some node, there are multiple dots present in the metadata.</p>
+<p><img src="https://wombat.me/posts/diffs/./divergent.png" alt="Divergent Peers" /></p>
+<p>And the resultant diff to be sent from Peer E to Peer A is shown below:</p>
+<p><img src="https://wombat.me/posts/diffs/./diff.png" alt="Diff" /></p>
+<p>Diff merging is the same process: walking the tree, applying the diff. Bear in mind that replication is asynchronous and may occur between multiple peers at once, and so Diff applications must take account of the current local version vector, in case of receipt of redundant data. Diff application, just like full state merge, is idempotent, commutative, and associative.</p>
+<h4 id="tombstone-metadata">Tombstone Metadata</h4>
+<p>Nothing is for free, and by not using Deltas and their buffers, we are required to keep track of the removal of properties from a CRDT Map. We do this with a tombstone. In the original Remove Wins Ditto CRDT Map, the tombstone is the name of the property, and a single dot. A single dot is all that is needed. It marks the event of the removal. The application of the tombstone is simple too: if the receiving peer's version vector has <em>not</em> seen the dot then the remove wins, and the data below that node in the tree is dropped. Removing a document
+removes <em>all</em> the data and leaves behind only a Version Vector and a tombstone.</p>
+<h2 id="summary">Summary</h2>
+<p>Ditto's replication protocol takes advantage of Version Vectors and the CRDT Map tree structure to replicate Diffs between peers in order to bring about convergence. Diffs, unlike deltas, do not require buffers, or known sets of peers, they are calculated when needed from the full state CRDT on disk.</p>
+<p>Diffs <em>do</em> require some more metadata, and for tracking removes they require some kind of tombstone. In Ditto's old Remove Wins Map the tombstone was a single dot. With Add Wins Maps this is more complex, and that is the subject of my next post!</p>
+<h3 id="interested-in-more-content-like-this">Interested in more content like this?</h3>
+<p><a href="https://ditto.live/blog">Sign up at Ditto to register your interest</a></p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

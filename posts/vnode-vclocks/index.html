@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html class="dark light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Vector Clocks Revisted
+        
+    </title>
+
+        
+            <meta property="og:title" content="Vector Clocks Revisted" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://wombat.me/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="" href="https://wombat.me/atom.xml">
+
+
+    
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://wombat.me/main.css />
+
+    
+
+    <script src=https://wombat.me/js/feather.min.js></script>
+</head>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;wombat.me></a>
+
+        <div class="socials">
+            
+            <a rel="me" href="https:&#x2F;&#x2F;github.com&#x2F;russelldb" class="social">
+                <img alt=GitHub src="/social_icons/github.svg">
+            </a>
+            
+        </div>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F; style="margin-left: 0.7em">Home</a>
+        
+    </nav>
+
+    
+</header>
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Vector Clocks Revisted<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2015-10-06</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h1 id="vector-clocks-revisited">Vector Clocks Revisited</h1>
+<p>In our everyday lives we use the notion of time to order events: get up before breakfast, eat before work, etc. As this excellent <a href="https://queue.acm.org/detail.cfm?id=2745385">ACM</a> article shows, time can be complex in a distributed system.</p>
+<p>This is the first of three blog posts about changes to Riak’s logical clocks. They cover a lot of ground: over 3 years. The aim is to write about my latest work with logical clocks in Riak, but in order to have a context, we first need to go back in time.</p>
+<p>Back in 2010 Riak engineers published two seminal blog posts about Vector Clocks and Riak: <a href="https://riak.com/why-vector-clocks-are-easy/index.html">“Why Vector Clocks Are Easy”</a> and it’s companion piece <a href="https://riak.com/why-vector-clocks-are-hard/index.html">“Why Vector Clocks Are Hard.”</a></p>
+<p>These two posts are still very valuable, and worth reading, but a lot has changed since then. This series of posts will hopefully bridge the gap.</p>
+<h2 id="why-the-logical-clocks"><strong>Why The Logical Clocks?</strong></h2>
+<p>Riak KV is an eventually consistent key-value database that favours write availability. To achieve this, it allows multiple clients to write concurrently, potentially to the same key. Riak KV uses logical clocks to track the history of updates to values, and detect <em>conflicting</em> writes.</p>
+<p>From here on, these logical clocks will be referred to as <em>Version Vectors</em>, with thanks to <a href="https://twitter.com/xmal">Carlos Baquero</a> and this <a href="https://haslab.wordpress.com/2011/07/08/version-vectors-are-not-vector-clocks/">blog post</a>.</p>
+<h2 id="part-1-vnode-version-vectors"><strong>Part 1: Vnode Version Vectors</strong></h2>
+<p>The subject of this first post is a major change to Riak KV’s logical clocks in the 1.0 release back in September 2011. At that time Riak KV moved from <em>client side IDs</em> to <em>vnode IDs</em>. In the <a href="https://riak.com/why-vector-clocks-are-hard/index.html">“Why Vector Clocks Are Hard”</a> article mentioned above the author explains that this is a difficult thing to do, but the benefits appeared to outweigh the costs.</p>
+<p>But, before all that, some basics.</p>
+<h3 id="a-note-on-notation"><strong>A Note on Notation</strong></h3>
+<p>Throughout this post I use a sort of <a href="http://erlang.org/">Erlang</a>-like syntax.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#a7adba;">%% This is a comment
+</span><span>\[\] </span><span style="color:#a7adba;">%% This is a list
+</span><span>{} </span><span style="color:#a7adba;">%% This is a tuple
+</span><span style="color:#bf616a;">Uppercase</span><span>\</span><span style="color:#bf616a;">_word </span><span style="color:#a7adba;">%% This is a variable
+</span><span style="color:#a3be8c;">lowercase </span><span style="color:#a7adba;">%% This is an atom
+</span><span style="color:#d08770;">1007 </span><span style="color:#a7adba;">%% this is a number
+</span><span style="color:#bf616a;">Var </span><span>= \[{</span><span style="color:#a3be8c;">atomx</span><span>, </span><span style="color:#bf616a;">Var1</span><span>}, {</span><span style="color:#a3be8c;">atomz</span><span>, </span><span style="color:#bf616a;">Var2</span><span>}\] </span><span style="color:#a7adba;">%% this is a binding that says Var is equal to this list
+</span></code></pre>
+<h3 id="version-vector-recap"><strong>Version Vector Recap</strong></h3>
+<p>Skip down to the next section if you already know how Version Vectors work.</p>
+<p>A Version Vector is a data structure that summarises the history of updates to a value. In Riak each Key has its own Version Vector. The data structure is a list of pairs of Actor and Counter.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>[{</span><span style="color:#bf616a;">Actor </span><span>, </span><span style="color:#bf616a;">Counter</span><span>}]
+</span></code></pre>
+<p>An <em><code>actor</code></em> is some entity in the system that makes updates to a object. The actor is the unit of concurrency in the system. Examples might be a server, a client, a virtual node, a process, a thread. Anything that can be uniquely identified and performs actions.</p>
+<p>When an actor updates a key it will increment only it’s own entry in the vector. An actor’s entry is a summary of all the updates that actor has performed. If an actor is not present in the vector, its counter is agreed to be at zero. As each entry is a summary of an actor’s updates, the whole Version Vector summarises all the updates to the key from all the actors in the system.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">A </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">3</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#a3be8c;">c</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>In Version Vector <strong><code>A</code></strong> above three actors have updated the key. Actor <strong><code>a</code></strong> has issued three updates, <strong><code>b</code></strong> two, and <strong><code>c</code></strong> has issued one.</p>
+<p>On its own, this does not tell us much. Version Vectors are usually considered in pairs.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">A </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">3</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#a3be8c;">c</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span><span style="color:#bf616a;">B </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">3</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#a3be8c;">c</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>This pair of Version Vectors, <strong><code>A</code></strong> and <strong><code>B</code></strong> above, are equal. They describe exactly the same set of events, or <em><code>history</code></em>.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">A </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#a3be8c;">c</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span><span style="color:#bf616a;">B </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">3</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">2</span><span>}, {</span><span style="color:#a3be8c;">c</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>In the pair <strong><code>A</code></strong> is an ancestor of <strong><code>B</code></strong>. We say that <strong><code>B</code></strong> <em><code>dominates</code></em> <strong><code>A</code></strong>. <strong><code>B</code></strong> has seen an extra event <code>({a, 3})</code> which means its clock showing a later logical time than <strong><code>A</code></strong>. You can think of <em><code>dominates</code></em> as <em><code>greater than</code></em>:</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">B </span><span>&gt; </span><span style="color:#bf616a;">A
+</span></code></pre>
+<p>When Riak considers the values represented by these Version Vectors it can discard <strong><code>A</code></strong> as all its information is contained in <strong><code>B</code></strong>. This is more meaningful than just a greater temporal timestamp; with a dominated Version Vector we <em><code>know</code></em> for certain that the events in <strong><code>A</code></strong> caused <strong><code>B</code></strong>. A wall-clock derived timestamp does not convey this information.</p>
+<p><em><code>Dominates</code></em> is a stricter relationship than <em><code>descends</code></em>. For any pair of Version Vectors <strong><code>A descends B</code></strong> if <strong><code>A</code></strong> summarises all the events <strong><code>B</code></strong> does. So the <em><code>equal</code></em> Version Vectors, like in the pair above, descend each other. You can think of <em><code>descends</code></em> as <em><code>greater than or equal</code></em>. If <strong><code>B</code></strong> descends <strong><code>A</code></strong> then <strong><code>B &gt;= A</code></strong>.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">A </span><span>= []
+</span><span style="color:#bf616a;">B </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>In the pair above <strong><code>B dominates A</code></strong>. All Version Vectors descend the empty Version Vector, and this single event means <strong><code>B</code></strong> summarises events does not.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">A </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span><span style="color:#bf616a;">B </span><span>= [{</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>This pair of Version Vectors are in conflict, or <em><code>concurrent</code></em>.  A pair of Version Vectors <strong><code>A</code></strong> and <strong><code>B</code></strong> are concurrent if <strong><code>A</code></strong> summarises events unseen by <strong><code>B</code></strong> <em><code>AND</code></em> <strong><code>B</code></strong> summarises events unseen by <strong><code>A</code></strong>. Actors <strong><code>a</code></strong> and <strong><code>b</code></strong> have updated the value “at the same time”. And this is the magic of Version Vectors. They allow Riak to detect concurrent writes to a key, and store sibling values. This would be impossible with wall-clock time due to lack of perfect precision, synchronization, and information about causality.</p>
+<p>When there is conflict, or concurrency, it needs to be resolved by a write, and that write is a new event. First <em><code>merge</code></em> <strong><code>A</code></strong> and <strong><code>B</code></strong> and provide the resulting Version Vector to the client as a context. This ensures the next write descends both <strong><code>A</code></strong> and <strong><code>B</code></strong>.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">A   </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span><span style="color:#bf616a;">B   </span><span>=         [{</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span><span style="color:#bf616a;">AB  </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">1</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>Merging two Version Vectors takes the <a href="https://en.wikipedia.org/wiki/Pairwise_comparison">pairwise maximum</a> of each entry. See <strong><code>AB</code></strong> above. This merged Version Vector dominates both <strong><code>A</code></strong> and <strong><code>B</code></strong>. When Actor <strong><code>c</code></strong> issues a new update, it will increment its counter in this merged Version Vector, ensuring the new value overwrites both the conflicting values as <strong><code>ABC</code></strong> <code>_dominates_</code> <strong><code>A</code></strong>, <strong><code>B</code></strong>, and <strong><code>AB</code></strong>. Riak will store the merged Version Vector with the new value as the <strong><code>frontier</code></strong>, or latest logical time.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">ABC </span><span>= [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">1</span><span>}, {</span><span style="color:#a3be8c;">b</span><span>, </span><span style="color:#d08770;">1</span><span>}, {</span><span style="color:#a3be8c;">c</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>To summarise: actors working serially update their own entry in a vector moving logical time forward in discrete events. Conflict, ancestry, and dominance can be established by comparing logical clocks for a key.</p>
+<p>With the basics dealt with, on to the subject of this post. Before we look at what <strong><code>Vnode Version Vectors</code></strong> are, why would we want them?</p>
+<h3 id="actor-explosion"><strong>Actor Explosion</strong></h3>
+<p>Prior to Riak 1.0, the <strong><code>actor</code></strong> in the Version Vector was provided by the Client Application. A client would perform a read, modify the returned value, and issue a new write, sending Riak the Version Vector it read, a <em><code>Client ID</code></em>, and the new value. Riak would then increment the Client’s entry in the Version Vector, meaning this new write dominates the value(s) it read, and store it on disk.</p>
+<p>In the worst case, an application might start a thread for each PUT operation, pass the <code>thread ID</code> to Riak as a client ID, then exit on completion. Imagine 10 application servers, each serving 1000s of concurrent requests, each sending a single-use-actor-id. The result is Version Vectors far larger than the data, and frequent, aggressive vclock pruning. Remember that “In a real world scenario with long-lived data, each data element would end up with a vector clock with a length proportional to the number of clients that had ever <a href="/why-vector-clocks-are-hard/index.html">modified it</a>.” Which sounds <a href="http://dl.acm.org/citation.cfm?id=117606">familiar</a>.</p>
+<p>But that is not the worst of it.</p>
+<h3 id="client-complexity"><strong>Client Complexity</strong></h3>
+<p>Using Client IDs in Version Vectors means client <em>applications</em> enforce database invariants. While it is merely preferable that actors are long lived, for fewer IDs in a Version Vector, there are invariants that <em>must</em> be maintained:</p>
+<ul>
+<li>Each actor <em>must</em> be unique.</li>
+<li>Each new update must be accompanied by a strict increase in the event counter. That is each update the actor produces <em>must</em> increment the event counter in the vector to a value greater than before; an individual actor <em>must</em> always issue a strictly increasing total order of events.</li>
+</ul>
+<p>The most common way to satisfy these invariants is to enforce that:</p>
+<ul>
+<li>An actor <em>must</em> act serially.</li>
+<li>An actor <em>must</em> only update it’s own entry in a Version Vector.</li>
+</ul>
+<p>Breaking either of these invariants leads to incorrect behaviour, the worst of which is silent data loss. This is a lot to ask of a client application, and somewhat more than the implied contract of “provide an ID, and the last vector clock you saw for a given value.”</p>
+<p>Worse still, back when Riak used client IDs, there was an edge case that made maintaining these invariants impossible under certain failure scenarios.</p>
+<h3 id="read-your-own-writes-ryow"><strong>Read Your Own Writes (RYOW)</strong></h3>
+<p>In order for a <em>client</em> to issue a strictly increasing order of events, it must <em>know</em> the last event it issued. Since Riak is eventually consistent, there is no guarantee that a client will read its last write, unless it issues the write to <strong><code>PW</code></strong> primary replicas, and reads the result from <strong><code>PR</code></strong> primary replicas such that</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">PW</span><span>+</span><span style="color:#bf616a;">PR </span><span>&gt; </span><span style="color:#bf616a;">N
+</span></code></pre>
+<p>Where <strong><code>N</code></strong> is the number of replicas for the key.</p>
+<p>This guarantees that some Primary <strong><code>P</code></strong> is in both the read and write quorum. This is called a <em>strict quorum</em> as opposed to Riak’s default <em>sloppy quorum</em> settings.</p>
+<p>Requiring a strict quorum reduces the <em>Availability</em> of Riak in the case of node failures or network partitions.</p>
+<h4 id="history-repeating">History Repeating</h4>
+<p>What happens when you don’t read your own writes? Before looking at an example, here’s Riak’s pre-1.0 algorithm for Version Vectors.</p>
+<ul>
+<li>Client Gets Value+Version Vector for Key</li>
+<li>Client Sends Put Request to Riak with Value and ClientID and Version Vector</li>
+<li>Riak increments the entry for ClientID in Version Vector</li>
+<li>At each of <strong><code>N</code></strong> Vnodes:
+<ul>
+<li>Read local value from disk</li>
+<li>If local Version Vector descends incoming Version Vector ignore write (you’ve seen it!)</li>
+<li>If Incoming Version Vector descends local Version Vector overwrite local value with new one</li>
+<li>If Incoming Version Vector is concurrent with local Version Vector, add new value as <strong>sibling</strong></li>
+</ul>
+</li>
+</ul>
+<p>Working correctly depends on that first step. That context from the GET absolutely <em>must</em> contain the highest event the Client ID has issued.</p>
+<p>Why? Simply to add one to the Version Vector and for the result to be a <em>new</em> event, a greater counter, and a later logical time, for this actor than previous events.</p>
+<p><img src="https://wombat.me/posts/vnode-vclocks/vector-clock-revisited1.png" alt="vector-clock-revisited1" /></p>
+<p>We can come up with a pretty simple example where data is lost. Any condition that causes a disjoint read and write set, (say read from <strong><code>[A’, B’, C’]</code></strong> and get <strong><code>not\_found</code></strong>, write to <strong><code>[A, B, C]</code></strong>, repeat.) Each write will have the same Version Vector entry of <strong><code>[{X, 1}]</code></strong>, meaning that after an initial write, all subsequent writes will be dropped, as per the algorithm above:</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span style="color:#bf616a;">Local </span><span>= [{</span><span style="color:#bf616a;">X</span><span>, </span><span style="color:#d08770;">1</span><span>}] </span><span style="color:#a7adba;">%% descends
+</span><span style="color:#bf616a;">Incoming </span><span>= [{</span><span style="color:#bf616a;">X</span><span>, </span><span style="color:#d08770;">1</span><span>}]
+</span></code></pre>
+<p>And there are many permutations of failures, partitions, and slow responses that can lead to not reading your own writes.</p>
+<p>The cause of the issue is that the same <em>event</em> <strong><code>{X, 1}</code></strong> tagged two different things. Each event in a Version Vector is a <em>unique</em> moment in logical time. Two Version Vectors that are equal <em>must</em> represent the same history. In this case <strong><code>[{X, 1}]</code></strong> could be one of two writes, with potentially different values! In other words, without Read Your Own Writes, Version Vectors may fail to detect concurrent updates: <em>their one and only job</em>.</p>
+<h4 id="so-read-your-own-writes">So Read Your Own Writes!</h4>
+<p>Riak does not ship with <strong><code>PW=quorum</code></strong> and <strong><code>PR=quorum</code></strong> by default: Riak believes people choose Riak for <em>availability</em>. However, if you were aware of the requirement to Read Your Own Write, and set the correct options, there was a bug that may mean you would not Read Your Own Writes, but believe that you had.</p>
+<p>Riak 1.0 fixed the <a href="https://github.com/basho/riak_kv/pull/485">bug</a>, but by then, we had <em>Vnode Version Vectors</em>.</p>
+<h3 id="this-one-weird-trick"><strong>This One Weird Trick</strong></h3>
+<p>In order to relieve the client application of the burden of ID management Riak Engineers figured out a way to have the <a href="https://docs.riak.com/riak/latest/theory/concepts/vnodes/index.html"><em>vnodes</em></a> be the actors in the system. This makes perfect sense, as the vnode is already the unit of concurrency in Riak.</p>
+<p>In the  <a href="https://riak.com/why-vector-clocks-are-hard/index.html">“Why Vector Clocks Are Hard”</a> post the author describes an issue with <em>Server Actor IDs</em> that is identical to the repeating-history bug above. Namely two different events that were in fact concurrent get the same Version Vector. How does this happen?</p>
+<p><img src="https://wombat.me/posts/vnode-vclocks/version-clock-revisited2.png" alt="version-clock-revisited2" /></p>
+<ul>
+<li>Clients <strong><code>X</code></strong> and <strong><code>Y</code></strong> both read key <strong><code>K</code></strong> and get <strong><code>Rita</code></strong> <strong><code>[{a, 1}]</code></strong></li>
+<li>Client <strong><code>X</code></strong> PUTs “bob”</li>
+<li>Client <strong><code>Y</code></strong> PUTs “sue”</li>
+<li>Riak vnode <strong><code>a</code></strong> handles the <strong><code>Y</code></strong> PUT, sets the Version Vector to <strong><code>[{a, 2}]</code></strong> and value to “Sue”</li>
+<li>Riak vnode <strong><code>a</code></strong> handles the <strong><code>X</code></strong> PUT…</li>
+</ul>
+<p>What should the vnode do? The incoming Version Vector is <strong><code>[{a, 1}]</code></strong>. Vnode a can increment its entry, creating the vector <strong><code>[{a, 2}]</code></strong>, but then we have two different values with the same Version Vector. We failed to capture concurrency, and some write ends up lost.</p>
+<p>We could read the local value for <strong><code>K</code></strong> and see the Version Vector is <strong><code>[{a, 2}]</code></strong> which <em>dominates</em> the incoming <strong><code>[{a, 1}]</code></strong> and discard the incoming write. This seems unfair, as in any <em>race</em>, only one client can <em>“win”</em> (some databases do this with wall clock time!)</p>
+<p>We could tweak the Version Vector algorithm:</p>
+<ul>
+<li>If local Version Vector <em>descends</em> Incoming Version Vector, add new value as <strong>sibling</strong>.</li>
+</ul>
+<p>This trick introduces <em>false concurrency</em> and allows us to store “Sue” and “Bob” as sibling values, while discarding “Rita” as an ancestor of the incoming Version Vector <strong><code>[{a, 1}]</code></strong>.</p>
+<h3 id="it-s-all-good"><strong>It’s all good</strong></h3>
+<p>It also has the handy benefit that badly behaving clients that do not retrieve a Version Vector before writing will still generate a sibling on PUT, meaning their write values are stored, rather than being silently discarded as <em>seen</em>.</p>
+<p>What have we achieved? Smaller Version Vectors: in the order of the number of replicas for the key (by default 3 in Riak). Simpler for clients: for best behaviour provide the latest Version Vector you’ve seen when you issue a PUT, but of the Version Vector is <em>stale</em> it doesn’t matter, your value will be stored as a sibling.</p>
+<p>In short:</p>
+<ul>
+<li>No more Read Your Own Writes</li>
+<li>Smaller Version Vectors</li>
+<li>Simpler clients</li>
+</ul>
+<h3 id="downside"><strong>Downside?</strong></h3>
+<h4 id="idempotent-puts">Idempotent PUTs</h4>
+<p>On the downside Vnode Version Vectors lose <em>idempotent</em> PUTs.</p>
+<p>With Client IDs if some client A sends a PUT with ID X and clock <strong><code>[{X, 2}, {Y, 3}]</code></strong> and Riak fails to answer, but stores the write, re-issuing the same write will be <em>idempotent</em>. With <em>Vnode Version Vectors</em> re-issuing the write generates a sibling with an identical value. However Riak side-steps that by storing a <strong><code>Set</code></strong> of siblings values.</p>
+<h4 id="coordinating-vnode">Coordinating Vnode</h4>
+<p>Another downside is that there must be a coordinating vnode to increment the Version Vector. This means that when a request reaches Riak, the <code>preference list</code> must be consulted and a vnode on the <code>preference list</code> is chosen to coordinate the <code>PUT</code>. If the node that received the request is not on the preference list, then the request must be <em>forwarded</em> to a node that is: this introduces some latency to a <code>PUT</code>.</p>
+<h4 id="sibling-explosion">Sibling Explosion</h4>
+<p>As a result of false concurrency riak is unable to accurately discern truly concurrent writes from interleaved writes, leading in the worst case to an “explosion” of sibling values. This is fixed in Riak 2.0, so don’t panic! This “sibling explosion” is also the subject of the next blog post.</p>
+<h2 id="summary"><strong>Summary</strong></h2>
+<p>Since we released Riak 1.0, we no longer need to talk about “vclocks”, but instead a “causal context” or just “context”. Vnode Version Vectors solved some difficult issues for Riak users around availability and client process management, but they came with some costs. For the sake of completeness, here are the <a href="https://github.com/basho/riak/blob/1.0/RELEASE-NOTES.org#getput-improvements">release notes for Vnode Version Vectors</a>.</p>
+<p><a href="../dvv">Next time</a> we’ll look at that “sibling explosion” bug in Vnode Version Vectors, and how academic intervention saved the day.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html class="dark light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+
+    
+    
+    
+    <title>
+         Dotted Version Vectors In Riak
+        
+    </title>
+
+        
+            <meta property="og:title" content="Dotted Version Vectors In Riak" />
+        
+     
+
+     
+         
+     
+
+     
+         
+    
+
+    
+    
+
+    
+    
+        <link href=https://wombat.me/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="" href="https://wombat.me/atom.xml">
+
+
+    
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://wombat.me/main.css />
+
+    
+
+    <script src=https://wombat.me/js/feather.min.js></script>
+</head>
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <a href=https:&#x2F;&#x2F;wombat.me></a>
+
+        <div class="socials">
+            
+            <a rel="me" href="https:&#x2F;&#x2F;github.com&#x2F;russelldb" class="social">
+                <img alt=GitHub src="/social_icons/github.svg">
+            </a>
+            
+        </div>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F; style="margin-left: 0.7em">Home</a>
+        
+    </nav>
+
+    
+</header>
+
+        
+        
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Dotted Version Vectors In Riak<span class="primary-color" style="font-size: 1.6em">.</span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2015-10-10</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+        
+
+        <section class="body">
+            <h1 id="dotted-version-vectors-in-riak">Dotted Version Vectors In Riak</h1>
+<p><a href="../vnode-vclocks">Last time</a>
+I wrote about vnode version vectors, and how they simplify client
+interaction with Riak, while keeping logical clock sizes small. I also
+mentioned a bug: &quot;sibling explosion.&quot; This post is going to describe
+that bug, and the fix for it: Dotted Version Vectors.</p>
+<p>There is a lot of other material about Dotted Version Vectors out
+there, including
+<a href="https://www.youtube.com/watch?v=3SWSw3mKApM">Sean Cribbs' Talk</a>, an
+excellent
+<a href="https://github.com/ricardobcl/Dotted-Version-Vectors">Github repo and README</a>
+from <a href="http://haslab.uminho.pt/tome">Ricardo Tomé Gonçalves</a>, and a
+paper
+<a href="http://haslab.uminho.pt/tome/files/dvvset-dais.pdf">Scalable and Accurate Causality Tracking for Eventually Consistent Stores</a>. This
+blog post covers only the application of Dotted Version Vectors in
+Riak.</p>
+<h2 id="vnode-version-vector-recap">Vnode Version Vector Recap</h2>
+<p>In the last post we saw how Vnode version vectors tweak the standard
+version vector algorithm. Let's quickly recap how.</p>
+<p>With a <em>ClientId Version Vector</em> Riak generated siblings like this:</p>
+<ol start="5">
+<li>If Local Version Vector <em>descends</em> Incoming
+<ol>
+<li>Discard/ignore incoming write</li>
+</ol>
+</li>
+<li>If Incoming <em>descends</em> Local
+<ol>
+<li>Write new value to disk</li>
+</ol>
+</li>
+<li>If Incoming <em>concurrent</em> with Local
+<ol>
+<li><em>Merge</em> Incoming and Local Version Vectors</li>
+<li>Store Incoming value as a <em>sibling</em></li>
+</ol>
+</li>
+</ol>
+<p>But with Vnode Version Vectors this becomes:</p>
+<ol>
+<li>If Incoming <em>descends</em> Local
+<ol>
+<li>Increment Vnode's entry in <em>incoming</em> Version Vector</li>
+<li>Write new value to disk</li>
+</ol>
+</li>
+<li>Otherwise
+<ol>
+<li><em>Merge</em> Incoming and Local Version Vectors</li>
+<li>Increment Vnode's entry in <em>merged</em> Version Vector</li>
+<li>Store Incoming value as a <em>sibling</em></li>
+</ol>
+</li>
+</ol>
+<p>We use a single version vector to cover the full set of sibling
+values. But a version vector is not enough to correctly track
+causality when the actor, the vnode, is a proxy for multiple clients.</p>
+<h2 id="sibling-explosion">Sibling Explosion</h2>
+<p>What is Sibling Explosion, and how does it happen?</p>
+<p>Imagine two clients <strong><code>X</code></strong>, and <strong><code>Y</code></strong>. They're both updating the same
+key. For simplicity this illustration will use Riak's <strong><code>Return Body</code></strong>
+option, which means Riak replies to every <strong><code>PUT</code></strong> with the latest result
+it stored on disk at the coordinating vnode. This is just simpler than
+having the client fetch after every <strong><code>PUT</code></strong>.</p>
+<p><img src="https://wombat.me/posts/dvv/sib-ex.png" alt="Interleaved Writes: Sibling Explosion" title="Interleaved Writes: Sibling Explosion" /></p>
+<p>In the above diagram we see a &quot;sibling explosion.&quot;  Vnode Version
+Vectors are incapable of tracking causality in a fine grained manner,
+and these interleaving writes generate <em>false concurrency</em>. Let's walk
+through the steps as numbered on the diagram.</p>
+<ol>
+<li>
+<p>Client <strong><code>Y</code></strong> PUTs the value &quot;Bob&quot; with an empty context.</p>
+</li>
+<li>
+<p>Vnode A sees that <strong><code>[]</code></strong> <em>descends</em> the local Version Vector (also
+<strong><code>[]</code></strong>) and increments its entry in the incoming Version Vector,
+storing the value with new version Vector <strong><code>[{a, 1}]</code></strong>. The value
+<strong><code>&quot;Bob&quot;</code></strong> and context <strong><code>[{a, 1}]</code></strong> are returned to Client <strong><code>Y</code></strong>.</p>
+</li>
+<li>
+<p>Client <strong><code>X</code></strong> PUTs the value &quot;Sue&quot; with an empty context. This PUT is
+causally concurrent with Client <strong><code>Y</code></strong>'s at Step 1.</p>
+</li>
+<li>
+<p>Using the algorithm described above, Vnode A detects that the
+context <strong><code>[]</code></strong> does not <em>descend</em> <strong><code>[{a, 1}]</code></strong> and treats the write as
+concurrent, it increments the local Version Vector to <strong><code>[{a, 2}]</code></strong>
+and stores the incoming value as a <strong><code>sibling</code></strong>. So far so good. The
+Vnode Version Vector correctly captured concurrency! Vnode A
+returns the sibling values <strong><code>[&quot;Bob&quot;, &quot;Sue&quot;] [{a, 2}]</code></strong> to Client <strong><code>X</code></strong>.</p>
+</li>
+<li>
+<p>Client <strong><code>Y</code></strong> PUTs the value &quot;Rita&quot; with the context
+<strong><code>[{a, 1}]</code></strong>. Remember that Client <strong><code>Y</code></strong> saw the result of its own PUT
+before Client <strong><code>X</code></strong> PUT at step 3.</p>
+</li>
+<li>
+<p>Vnode A detects that the incoming Version Vector <strong><code>[{a, 1}]</code></strong> does
+not <em>descend</em> the local Version Vector of <strong><code>[{a, 2}]</code></strong>. It increments
+its entry in the local Version Vector, and adds &quot;Rita&quot; as a sibling
+value. Wait! What? We <em>know</em> that Client <strong><code>Y</code></strong> <em>saw</em> &quot;Bob&quot; as a value,
+after all, it PUT that value! So &quot;Rita&quot; should at least <em>replace</em>
+&quot;Bob&quot;. Yes, it is concurrent with &quot;Sue&quot;, but only &quot;Sue&quot;.</p>
+</li>
+<li>
+<p>Client <strong><code>X</code></strong> PUTs a new value &quot;Michelle&quot; with context
+<strong><code>[{a, 2}]</code></strong>. Client <strong><code>Y</code></strong> means to replace what it has read, the sibling
+values &quot;Bob&quot; and &quot;Sue&quot; with a new, single value &quot;Michelle&quot;.</p>
+</li>
+<li>
+<p>As before Vnode A detects that <strong><code>[{a, 2}]</code></strong> does not <em>descend</em>
+<strong><code>[{a, 3}]</code></strong> and adds the incoming value as a sibling. Again, we can
+see this is wrong. At Step 4 Client <strong><code>X</code></strong> saw both &quot;Bob&quot; and &quot;Sue&quot; and
+this new write intends to replace those values.</p>
+</li>
+</ol>
+<h3 id="what-just-happened">What Just Happened?</h3>
+<p>Vnode A loses some essential causal information. At Step 4 it ends up
+storing both &quot;Bob&quot; and &quot;Sue&quot; with a Version Vector of <strong><code>[{a, 2}]</code></strong>. It
+has &quot;forgotten&quot; that &quot;Bob&quot; was associated with time <strong><code>[{a, 1}]</code></strong>. When
+Client <strong><code>Y</code></strong> PUTs again, with the now stale context of <strong><code>[{a,1}]</code></strong> the Vnode
+is unable to determine that this PUT means to replace &quot;Bob&quot; since
+&quot;Bob&quot; is now associated with the version vector <strong><code>[{a, 2}]</code></strong>.</p>
+<h2 id="dots-to-the-rescue">Dots To The Rescue</h2>
+<p>What we need is a fine grained mechanism to detect which siblings are
+removed by an update, and which siblings are actually concurrent or
+unrelated causally. That mechanism is the &quot;dot&quot;. Recall the basics of
+a Version Vector: that each actor must update its own entry in the
+vector by incrementing a counter. This counter is a summary of all the
+actors events. An entry <strong><code>{a, 4}</code></strong> says that actor <strong><code>a</code></strong> has issued 4
+updates. Integers make great summaries. <strong><code>4</code></strong> includes <strong><code>1, 2, 3, 4</code></strong>. Each of
+those steps that the counter went through is an update. And that is
+all a dot is: a single update, an event. Take the update <strong><code>{a, 4}</code></strong>. That is an event, an update, a dot. You can think of the Version
+Vector entry <strong><code>{a, 4}</code></strong> as a set of discrete events, and a dot as any
+one of those events.</p>
+<p><img src="https://wombat.me/posts/dvv/dots-vv-num.png" alt="Dots are just events" title="Dots are just events" /></p>
+<p>Hopefully the diagram above illustrates this. It's two different
+visual representations of the same Version Vector
+<strong><code>[{A, 4}, {B, 2}, {C, 3}]</code></strong>. The one on the right is a type of
+visualization I first saw when working with a group of academics from
+University Minho, and it helps illustrate the idea of Version Vectors
+and the history they summarize. The one on the left &quot;explodes&quot; the
+version vector into its discrete events.</p>
+<h2 id="dot-the-clocks">Dot The clocks</h2>
+<p>How does this help with the problem described above? We change the
+algorithm again. When we increment the version vector to store a new
+value, we take that latest event and store it, as a dot, with the
+value.</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">2</span><span>}]
+</span><span>    [&quot;</span><span style="color:#a3be8c;">Bob</span><span>&quot;, &quot;</span><span style="color:#a3be8c;">Sue</span><span>&quot;]
+</span></code></pre>
+<p>Becomes</p>
+<pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">2</span><span>}]
+</span><span>    [{</span><span style="color:#a3be8c;">a</span><span>,</span><span style="color:#d08770;">1</span><span>} -&gt; &quot;</span><span style="color:#a3be8c;">Bob</span><span>&quot;,
+</span><span>     {</span><span style="color:#a3be8c;">a</span><span>, </span><span style="color:#d08770;">2</span><span>} -&gt; &quot;</span><span style="color:#a3be8c;">Sue</span><span>&quot;]
+</span></code></pre>
+<p>That's all we have to do add fine grained causality tracking. Now when
+we have interleaving writes as above, we can see which sibling values
+an update replaces, and which it does not, by comparing the incoming
+version vector with the dots for each value. If the version vector
+<em>descends</em> the dot, the client has seen that value and the new write
+supersedes it. If the version vector is concurrent with the dot,
+retain that value as a truly concurrent write, or sibling.</p>
+<p><img src="https://wombat.me/posts/dvv/dvv-update.png" alt="DVV Update" title="DVV Update" /></p>
+<p>This diagram shows Step 6 again, this time with Dotted Version
+Vectors. We can see that the extra metadata, the Dot stored with a
+value, enables Riak to discard the value &quot;Bob&quot; since the incoming
+Version Vector of <strong><code>[{a, 1}]</code></strong> <em>descends</em> the dot stored with that
+value. The new dot generated from this update event <strong><code>{a, 3}</code></strong> is used
+to tag the new sibling &quot;Rita&quot;. &quot;Sue&quot; remains as a <em>genuine sibling</em>,
+since it is unseen by the incoming Version Vector <strong><code>[{a, 1}]</code></strong> we know
+that Client <strong><code>Y</code></strong> did not mean to replace that value.</p>
+<p>Thanks to this mechanism, Dotted Version Vectors, or <em>DVV</em> for short,
+a small increase in metadata storage fixes the Sibling Explosion bug.</p>
+<p>All that remains is to look at the initial example of sibling
+explosion again, and see that with Dotted Version Vectors, Riak
+correctly captures only genuinely concurrent operations, and stores
+only those values that are actual siblings.</p>
+<p><img src="https://wombat.me/posts/dvv/no-sib-ex.png" alt="No Explosion: Just Real Siblings" title="No Explosion: Just Real Siblings" /></p>
+<h3 id="why-dots">Why &quot;Dots?&quot;</h3>
+<p>Why that word &quot;Dots?&quot; If we think about Step 6 again, in the Dotted
+Version Vector case, you can imagine Vnode A generating the event <strong><code>{a, 3}</code></strong> and assigning it to the incoming value at once. Then merging the
+incoming DVV with the local one. The visualization of that PUT with
+dot assigned hopefully explains the name.</p>
+<p><img src="https://wombat.me/posts/dvv/dotted-ctx.png" alt="Context of {a, 1} with a Dot of {a,3}" title="Context of [{a,1}] and a dot of {a, 3}" /></p>
+<p>Conceptually there is gap between the incoming version vector
+<strong><code>[{a, 1}]</code></strong> and the event <strong><code>{a, 3}</code></strong>, and this gap leads to naming the
+non-contiguous event a Dot. Like the dot on a lower case letter
+&quot;i&quot;. Strictly speaking a &quot;dot&quot; is a non-contiguous event, but they're
+used in other places (like CRDTs) simply as discrete event tags, so
+the simpler explanation is good enough.</p>
+<h2 id="further-material">Further Material</h2>
+<p>This post only covers Dotted Version Vectors as implemented in
+Riak. By necessity we simply added the dot-per-sibling to object
+metadata. Dotted Version Vectors in Riak are fully backwards
+compatible with previous versions of Riak, and they can be switched on
+or off with a simple bucket property. Since Riak 2.0 Dotted Version
+Vectors are the default logical clock for bucket types in
+Riak. However, there are other implementations out there. Ricardo Tomé
+Gonçalves implemented an optimized Dotted Version Vector, called a
+Dotted Version Vector Set. The git repository is
+<a href="https://github.com/ricardobcl/Dotted-Version-Vectors">here</a>, and his
+code is also currently used in Riak for tracking Cluster Metadata.</p>
+<p>If you use Riak you get to use <em>DVV</em> for free, and you need never know
+nor care about the details. From a client perspective it is the same
+as Vnode Version Vectors, minus of course the sibling explosions.</p>
+<p>If you want to use Dotted Version Vectors in your own distributed
+application, then I recommend you read the
+<a href="http://haslab.uminho.pt/tome/files/dvvset-dais.pdf">paper</a>, and Ricardo Tomé Gonçalves
+<a href="https://github.com/ricardobcl/Dotted-Version-Vectors">repo</a>.</p>
+<h2 id="with-thanks">With thanks</h2>
+<p>For the sake of brevity this post does not tell the story of how we at
+Basho Engineering came to have Dotted Version Vectors in Riak. In
+short, some very brilliant academics in Portugal came up with Dotted
+Version Vectors as a solution to sibling explosion and then let us
+have it. This is the wonderful thing about research science, and I'm
+extremely grateful to have had the chance to work with Ricardo Tomé
+Gonçalves, Valter Balegas, Nuno Preguiça, Carlos Baquero, Paulo Sérgio
+Almeida, and others while fixing sibling explosion in Riak. The story
+of Sibling Explosion and Dotted Version Vectors in Riak truly is an
+example of academic expertise solving real world, industrial
+problems. Thanks again!</p>
+<h2 id="summary">Summary</h2>
+<p>Thanks to Vnode Version Vectors client interaction with Riak is
+simple, Read Your Own Writes is not required, and Version Vectors
+remain small. Thanks to Dotted Version Vectors we get to keep all
+those benefits without the risk of large objects from Sibling
+Explosion.</p>
+<h2 id="next-time-on-logical-clocks">Next Time on Logical Clocks</h2>
+<p>In the <a href="../per-key-epochs">next post</a> we look at another, less common bug that can lead to
+the past looking like the future.</p>
+<hr />
+<h4 id="more-thanks">More Thanks</h4>
+<p>Further thanks to Jon Meredith,
+<a href="https://twitter.com/zeeshanlakhani">Zeeshan Lakhani</a>(both Basho
+Engineering), Ricardo Tomé Gonçalves, Nuno Preguiça, and Carlos
+Baquero (again!) for reviewing this post and suggesting many
+improvements.</p>
+
+        </section>
+
+        
+
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>
