@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v3
+        with:
+          submodules: recursive # Fetch all submodules recursively
 
       - name: Install Zola
         run: |
