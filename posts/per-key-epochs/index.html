@@ -137,7 +137,7 @@ vnode where the database stores data? The simplest answer is: deletes.</p>
 understanding of how deletes in Riak work. Deletes are hard in an
 eventually consistent distributed system. Riak allows concurrent
 writes to the same value, and it also allows a value to be
-concurrently deleted and updated. Which operation &quot;wins&quot;? As with
+concurrently deleted and updated. Which operation "wins"? As with
 concurrent updates to a key, version vectors arbitrate. You can read
 more about
 <a href="http://docs.basho.com/riak/latest/ops/advanced/deletion">deletes in the Riak documentation</a>,
@@ -153,7 +153,7 @@ the tombstone is recorded on disk. A request to read a key that only
 has a tombstone value will return <strong><code>not_found</code></strong> as Riak understands
 tombstones to mean logical deletion. A
 <a href="http://docs.basho.com/riak/latest/ops/advanced/deletion/#Client-Library-Examples">client</a>
-can also ask Riak for the &quot;deleted vclock&quot; on a get, to ensure that a
+can also ask Riak for the "deleted vclock" on a get, to ensure that a
 new write supersedes a tombstone.</p>
 <h3 id="reaping-i-want-my-disk-space-back">Reaping: I want my disk space back!</h3>
 <p>Disks are cheap and disks are big, but they're neither free nor
@@ -165,7 +165,7 @@ reclaims space is called tombstone reaping. It's reasonably complex:</p>
 <ol>
 <li>Client issues <strong><code>delete</code></strong> command</li>
 <li>Riak writes special <strong><code>tombstone</code></strong> with Version Vector</li>
-<li>Riak internally performs a <strong><code>GET</code></strong> on the key, with the <a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Quorum">quorum</a> value set to <strong><code>all</code></strong> (which means &quot;ask all the replicas for the value, please.&quot;)</li>
+<li>Riak internally performs a <strong><code>GET</code></strong> on the key, with the <a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Quorum">quorum</a> value set to <strong><code>all</code></strong> (which means "ask all the replicas for the value, please.")</li>
 <li>If the result of the get is a tombstone AND all vnodes that reply are <a href="http://docs.basho.com/riak/latest/theory/concepts/glossary/#Sloppy-Quorum">primaries</a> the
 vnodes are told they may physically remove the key</li>
 <li>The vnode will read the key, check it is a tombstone, and check the <strong><code>delete_mode</code></strong>
@@ -197,8 +197,8 @@ from Riak, each replica responds with it's local copy. Using the
 Version Vector Riak can detect when some replica is behind, or in
 conflict, and send the most up-to-date value to that replica. The
 replica then stores the correct value. It is a curious fact that <em>all</em>
-the replying vnodes may need read repair as the &quot;most up-to-date
-value&quot; could be the result of <em>merging</em> all the responses. Imagine,
+the replying vnodes may need read repair as the "most up-to-date
+value" could be the result of <em>merging</em> all the responses. Imagine,
 for example, 3 clients each writing a different value, concurrently,
 to 3 vnodes.</p>
 <h2 id="hand-off">Hand Off</h2>
@@ -273,12 +273,12 @@ created for the key. Imagine some key <strong><code>X</code></strong> is on repl
 </span></code></pre>
 <p>For <em>whatever</em> reason, a coordinating write on node <strong><code>A</code></strong> fails to read
 <strong><code>X</code></strong>. Solar flare, disk error, operator removes the data directory 'cos
-&quot;3 replicas, it's OK!&quot;, <em>anything</em>. At this point we assign the
+"3 replicas, it's OK!", <em>anything</em>. At this point we assign the
 Version Vector</p>
 <pre data-lang="Erlang" style="background-color:#eff1f5;color:#4f5b66;" class="language-Erlang "><code class="language-Erlang" data-lang="Erlang"><span>    [{</span><span style="color:#bf616a;">A</span><span>, </span><span style="color:#d08770;">1</span><span>}]
 </span></code></pre>
 <p>To the new write. When it reaches replicas <strong><code>B</code></strong> and <strong><code>C</code></strong> they will
-discard the new value as &quot;already seen&quot;. Next Read Repair will cause
+discard the new value as "already seen". Next Read Repair will cause
 <strong><code>A</code></strong> to remove the value too. Same outcome (silent data loss), and from
 a similar case: a vnode failing to read its own writes.</p>
 <h2 id="epochs-is-the-answer">Epochs is the answer</h2>
@@ -289,8 +289,8 @@ the issue, the problem arises when a local <strong><code>not_found</code></stron
 creation of a new Version Vector when an older one from a <em>later
 logical time</em> still exists in the system.</p>
 <p>One possible answer is to have an <em>Epoch</em> for each key. When key <strong><code>X</code></strong>
-is created the <em>first</em> time call that &quot;Epoch 1&quot;. Then, if later it is
-deleted, and re-created the new <strong><code>X</code></strong> will be in &quot;Epoch 2.&quot; If some
+is created the <em>first</em> time call that "Epoch 1". Then, if later it is
+deleted, and re-created the new <strong><code>X</code></strong> will be in "Epoch 2." If some
 replica has key <strong><code>X</code></strong> in Epoch 1 and we try and compare it with Epoch 2,
 we can ensure that Epoch 1's Version Vector at <strong><code>[{A, 3}]</code></strong> does not
 dominate Epoch 2's Version Vector at <strong><code>[{A, 1}]</code></strong></p>
@@ -326,8 +326,8 @@ explosion in the number of actors in the system. This scheme isolates
 the growth of actors to individual keys.</p>
 <p>In the tombstone example above, the new Version Vector for the
 re-created 'X' key would be <strong><code>[{A:2, 1}]</code></strong> and would therefore conflict
-with the &quot;doomstone&quot; version vector. This ensures the new value
-survives. Is this <em>strictly</em> correct? No! Ideally in the &quot;doomstone&quot;
+with the "doomstone" version vector. This ensures the new value
+survives. Is this <em>strictly</em> correct? No! Ideally in the "doomstone"
 case the new epoch would dominate, but in the local fail to read case,
 the new epoch would be concurrent. But in either case no data is lost
 with this scheme.</p>

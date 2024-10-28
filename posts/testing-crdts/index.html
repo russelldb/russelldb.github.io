@@ -122,7 +122,7 @@ problem in an academic paper's optimized CRDT.</p>
 allow relaxed consistency models. They make handling conflicting
 updates easier for programmers, and enable the development of
 peer-to-peer and
-<a href="https://www.inkandswitch.com/local-first/">&quot;local-first&quot;</a>
+<a href="https://www.inkandswitch.com/local-first/">"local-first"</a>
 applications. They're the primary data-structure that developers work
 with in Ditto's Document Database. CRDTs allow Ditto to integrate
 concurrent changes from clients into a single, deterministic, and
@@ -212,7 +212,7 @@ will <em>shrink</em> the input into a minimal failing case. The classic
 example is that for all generated arrays as inputs, the reverse of the
 reverse of an array is equal to the original array. This is compared
 to unit testing where you make a bunch of arrays (empty?), hand
-code the result, and say &quot;expected == actual&quot;. Another common example
+code the result, and say "expected == actual". Another common example
 is round tripping for serialisation/deserialisation libraries. That
 the result of serialise then deserialise for <em>any input</em> is the same
 as the original input is a classic property.</p>
@@ -226,7 +226,7 @@ throughout. If some sequence of operations leads to a difference
 between the model and the system under test (hereafter SUT),
 quickcheck shrinks the operations to a minimal sequence.</p>
 <p>With data-structures (like CRDTs) this is great. We can take an
-&quot;obviously correct&quot;, but poorly optimised implementation of a CRDT
+"obviously correct", but poorly optimised implementation of a CRDT
 (like the classic <a href="https://hal.inria.fr/inria-00555588/document">Observe Remove Set</a>) and use it as the model, or
 specification, for a better implementation, like the <a href="https://lip6.fr/Marc.Shapiro/papers/RR-8083.pdf">Optimised Add
 Wins Set</a>.</p>
@@ -245,7 +245,7 @@ code. However, not everyone at Ditto has a licence, and not everyone
 at Ditto wants to learn Erlang. Even if I still think EQC statem is
 the gold standard, it isn't what I used for this work, but
 understanding the idea of generating a series of operations, and
-applying them to a model and a &quot;real&quot; implementation is all you need to
+applying them to a model and a "real" implementation is all you need to
 take from this section.</p>
 <h2 id="poor-man-s-rust-statem">Poor Man's Rust Statem</h2>
 <p>A very basic attempt to copy the process of EQC statem would be to generate a
@@ -268,11 +268,11 @@ OA-Set, the OR-Set, and the OAR-Set, testing them against each
 other using the basic model vs SUT approach described above.</p>
 <p>The Observed Add behavior was new to me. It isn't a Remove Wins in
 the sense that any remove concurrent with any add always
-wins. Instead, the Observed Add allows for the &quot;removal of removes&quot;
+wins. Instead, the Observed Add allows for the "removal of removes"
 that is to say in the case that re-adding something after observing
 its removal means that the remove itself will no long have an effect
 on some as yet unseen concurrent add. In a true remove wins set you
-can end up with the surprising &quot;mutual destruction&quot; of two Peers as
+can end up with the surprising "mutual destruction" of two Peers as
 described above who both:</p>
 <ol>
 <li>add element X to the set</li>
@@ -281,7 +281,7 @@ described above who both:</p>
 <li>merge</li>
 </ol>
 <p>In this case, with Observed Add, when Peer One re-inserts they are in
-effect saying &quot;I'm removing my remove!&quot; and so it has no effect on
+effect saying "I'm removing my remove!" and so it has no effect on
 concurrent adds. If you want to learn more about <em>how</em> this is achieved,
 you should <a href="https://arxiv.org/abs/1903.03487">read the paper</a>. It is
 neat, and I wish I'd known about it before I made the Remove Wins Map!.</p>
@@ -292,7 +292,7 @@ the SUT against the unoptimised version as the model. I was surprised
 to see they diverged.</p>
 <h2 id="the-test-a-counter-example">The Test; A Counter Example</h2>
 <p>The state of the system is modeled as a <code>BTreeMap&lt;usize, (Model, SUT)&gt;</code> where
-the key <code>usize</code> is a &quot;peer&quot; in the distributed system.</p>
+the key <code>usize</code> is a "peer" in the distributed system.</p>
 <p>The operations that the test performs on the system are:</p>
 <pre data-lang="rust" style="background-color:#eff1f5;color:#4f5b66;" class="language-rust "><code class="language-rust" data-lang="rust"><span>    </span><span style="color:#b48ead;">enum </span><span>SetOp {
 </span><span>        Replicate { src_peer: </span><span style="color:#b48ead;">usize</span><span>, dst_peer: </span><span style="color:#b48ead;">usize </span><span>},
@@ -350,7 +350,7 @@ acts on the element on Peer One.</p>
 <p>In the optimised specification a remove ACTUALLY REMOVES the element;
 it is forgotten (that's part of the optimisation). When we then merge
 Peer Two, the unoptimised set still has the element <code>0</code> in the set,
-and notices that the tombstone itself was &quot;removed&quot; by the re-add at
+and notices that the tombstone itself was "removed" by the re-add at
 Peer Two, and so the add on Peer One becomes concurrent with the
 <code>observe remove</code> on Peer Two (Observe Remove <em>means</em> Add Wins).</p>
 <p>Well done property testing! The paper passed review and was accepted
@@ -366,7 +366,7 @@ then the SUT matches the model.</p>
 <h2 id="the-fix">The Fix?</h2>
 <p>I wanted to fix it for the sake of the blog post, and for my own
 understanding. I'm not sure my fix is great, as it isn't really in the
-<em>spirit</em> of &quot;optimised.&quot; My changes are in <code>merge</code> and <code>lookup</code> of the
+<em>spirit</em> of "optimised." My changes are in <code>merge</code> and <code>lookup</code> of the
 spec.</p>
 <p>In <code>merge</code> we <em>never</em> remove/forget a value from the <code>Add</code> set, even
 if it appears to be tombstoned by the merge. In <code>lookup</code> merely being

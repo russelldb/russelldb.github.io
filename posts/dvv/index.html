@@ -113,7 +113,7 @@
 <p><a href="../vnode-vclocks">Last time</a>
 I wrote about vnode version vectors, and how they simplify client
 interaction with Riak, while keeping logical clock sizes small. I also
-mentioned a bug: &quot;sibling explosion.&quot; This post is going to describe
+mentioned a bug: "sibling explosion." This post is going to describe
 that bug, and the fix for it: Dotted Version Vectors.</p>
 <p>There is a lot of other material about Dotted Version Vectors out
 there, including
@@ -174,22 +174,22 @@ option, which means Riak replies to every <strong><code>PUT</code></strong> with
 it stored on disk at the coordinating vnode. This is just simpler than
 having the client fetch after every <strong><code>PUT</code></strong>.</p>
 <p><img src="https://wombat.me/posts/dvv/sib-ex.png" alt="Interleaved Writes: Sibling Explosion" title="Interleaved Writes: Sibling Explosion" /></p>
-<p>In the above diagram we see a &quot;sibling explosion.&quot;  Vnode Version
+<p>In the above diagram we see a "sibling explosion."  Vnode Version
 Vectors are incapable of tracking causality in a fine grained manner,
 and these interleaving writes generate <em>false concurrency</em>. Let's walk
 through the steps as numbered on the diagram.</p>
 <ol>
 <li>
-<p>Client <strong><code>Y</code></strong> PUTs the value &quot;Bob&quot; with an empty context.</p>
+<p>Client <strong><code>Y</code></strong> PUTs the value "Bob" with an empty context.</p>
 </li>
 <li>
 <p>Vnode A sees that <strong><code>[]</code></strong> <em>descends</em> the local Version Vector (also
 <strong><code>[]</code></strong>) and increments its entry in the incoming Version Vector,
 storing the value with new version Vector <strong><code>[{a, 1}]</code></strong>. The value
-<strong><code>&quot;Bob&quot;</code></strong> and context <strong><code>[{a, 1}]</code></strong> are returned to Client <strong><code>Y</code></strong>.</p>
+<strong><code>"Bob"</code></strong> and context <strong><code>[{a, 1}]</code></strong> are returned to Client <strong><code>Y</code></strong>.</p>
 </li>
 <li>
-<p>Client <strong><code>X</code></strong> PUTs the value &quot;Sue&quot; with an empty context. This PUT is
+<p>Client <strong><code>X</code></strong> PUTs the value "Sue" with an empty context. This PUT is
 causally concurrent with Client <strong><code>Y</code></strong>'s at Step 1.</p>
 </li>
 <li>
@@ -198,44 +198,44 @@ context <strong><code>[]</code></strong> does not <em>descend</em> <strong><code
 concurrent, it increments the local Version Vector to <strong><code>[{a, 2}]</code></strong>
 and stores the incoming value as a <strong><code>sibling</code></strong>. So far so good. The
 Vnode Version Vector correctly captured concurrency! Vnode A
-returns the sibling values <strong><code>[&quot;Bob&quot;, &quot;Sue&quot;] [{a, 2}]</code></strong> to Client <strong><code>X</code></strong>.</p>
+returns the sibling values <strong><code>["Bob", "Sue"] [{a, 2}]</code></strong> to Client <strong><code>X</code></strong>.</p>
 </li>
 <li>
-<p>Client <strong><code>Y</code></strong> PUTs the value &quot;Rita&quot; with the context
+<p>Client <strong><code>Y</code></strong> PUTs the value "Rita" with the context
 <strong><code>[{a, 1}]</code></strong>. Remember that Client <strong><code>Y</code></strong> saw the result of its own PUT
 before Client <strong><code>X</code></strong> PUT at step 3.</p>
 </li>
 <li>
 <p>Vnode A detects that the incoming Version Vector <strong><code>[{a, 1}]</code></strong> does
 not <em>descend</em> the local Version Vector of <strong><code>[{a, 2}]</code></strong>. It increments
-its entry in the local Version Vector, and adds &quot;Rita&quot; as a sibling
-value. Wait! What? We <em>know</em> that Client <strong><code>Y</code></strong> <em>saw</em> &quot;Bob&quot; as a value,
-after all, it PUT that value! So &quot;Rita&quot; should at least <em>replace</em>
-&quot;Bob&quot;. Yes, it is concurrent with &quot;Sue&quot;, but only &quot;Sue&quot;.</p>
+its entry in the local Version Vector, and adds "Rita" as a sibling
+value. Wait! What? We <em>know</em> that Client <strong><code>Y</code></strong> <em>saw</em> "Bob" as a value,
+after all, it PUT that value! So "Rita" should at least <em>replace</em>
+"Bob". Yes, it is concurrent with "Sue", but only "Sue".</p>
 </li>
 <li>
-<p>Client <strong><code>X</code></strong> PUTs a new value &quot;Michelle&quot; with context
+<p>Client <strong><code>X</code></strong> PUTs a new value "Michelle" with context
 <strong><code>[{a, 2}]</code></strong>. Client <strong><code>Y</code></strong> means to replace what it has read, the sibling
-values &quot;Bob&quot; and &quot;Sue&quot; with a new, single value &quot;Michelle&quot;.</p>
+values "Bob" and "Sue" with a new, single value "Michelle".</p>
 </li>
 <li>
 <p>As before Vnode A detects that <strong><code>[{a, 2}]</code></strong> does not <em>descend</em>
 <strong><code>[{a, 3}]</code></strong> and adds the incoming value as a sibling. Again, we can
-see this is wrong. At Step 4 Client <strong><code>X</code></strong> saw both &quot;Bob&quot; and &quot;Sue&quot; and
+see this is wrong. At Step 4 Client <strong><code>X</code></strong> saw both "Bob" and "Sue" and
 this new write intends to replace those values.</p>
 </li>
 </ol>
 <h3 id="what-just-happened">What Just Happened?</h3>
 <p>Vnode A loses some essential causal information. At Step 4 it ends up
-storing both &quot;Bob&quot; and &quot;Sue&quot; with a Version Vector of <strong><code>[{a, 2}]</code></strong>. It
-has &quot;forgotten&quot; that &quot;Bob&quot; was associated with time <strong><code>[{a, 1}]</code></strong>. When
+storing both "Bob" and "Sue" with a Version Vector of <strong><code>[{a, 2}]</code></strong>. It
+has "forgotten" that "Bob" was associated with time <strong><code>[{a, 1}]</code></strong>. When
 Client <strong><code>Y</code></strong> PUTs again, with the now stale context of <strong><code>[{a,1}]</code></strong> the Vnode
-is unable to determine that this PUT means to replace &quot;Bob&quot; since
-&quot;Bob&quot; is now associated with the version vector <strong><code>[{a, 2}]</code></strong>.</p>
+is unable to determine that this PUT means to replace "Bob" since
+"Bob" is now associated with the version vector <strong><code>[{a, 2}]</code></strong>.</p>
 <h2 id="dots-to-the-rescue">Dots To The Rescue</h2>
 <p>What we need is a fine grained mechanism to detect which siblings are
 removed by an update, and which siblings are actually concurrent or
-unrelated causally. That mechanism is the &quot;dot&quot;. Recall the basics of
+unrelated causally. That mechanism is the "dot". Recall the basics of
 a Version Vector: that each actor must update its own entry in the
 vector by incrementing a counter. This counter is a summary of all the
 actors events. An entry <strong><code>{a, 4}</code></strong> says that actor <strong><code>a</code></strong> has issued 4
@@ -250,7 +250,7 @@ visual representations of the same Version Vector
 <strong><code>[{A, 4}, {B, 2}, {C, 3}]</code></strong>. The one on the right is a type of
 visualization I first saw when working with a group of academics from
 University Minho, and it helps illustrate the idea of Version Vectors
-and the history they summarize. The one on the left &quot;explodes&quot; the
+and the history they summarize. The one on the left "explodes" the
 version vector into its discrete events.</p>
 <h2 id="dot-the-clocks">Dot The clocks</h2>
 <p>How does this help with the problem described above? We change the
@@ -275,10 +275,10 @@ retain that value as a truly concurrent write, or sibling.</p>
 <p><img src="https://wombat.me/posts/dvv/dvv-update.png" alt="DVV Update" title="DVV Update" /></p>
 <p>This diagram shows Step 6 again, this time with Dotted Version
 Vectors. We can see that the extra metadata, the Dot stored with a
-value, enables Riak to discard the value &quot;Bob&quot; since the incoming
+value, enables Riak to discard the value "Bob" since the incoming
 Version Vector of <strong><code>[{a, 1}]</code></strong> <em>descends</em> the dot stored with that
 value. The new dot generated from this update event <strong><code>{a, 3}</code></strong> is used
-to tag the new sibling &quot;Rita&quot;. &quot;Sue&quot; remains as a <em>genuine sibling</em>,
+to tag the new sibling "Rita". "Sue" remains as a <em>genuine sibling</em>,
 since it is unseen by the incoming Version Vector <strong><code>[{a, 1}]</code></strong> we know
 that Client <strong><code>Y</code></strong> did not mean to replace that value.</p>
 <p>Thanks to this mechanism, Dotted Version Vectors, or <em>DVV</em> for short,
@@ -288,8 +288,8 @@ explosion again, and see that with Dotted Version Vectors, Riak
 correctly captures only genuinely concurrent operations, and stores
 only those values that are actual siblings.</p>
 <p><img src="https://wombat.me/posts/dvv/no-sib-ex.png" alt="No Explosion: Just Real Siblings" title="No Explosion: Just Real Siblings" /></p>
-<h3 id="why-dots">Why &quot;Dots?&quot;</h3>
-<p>Why that word &quot;Dots?&quot; If we think about Step 6 again, in the Dotted
+<h3 id="why-dots">Why "Dots?"</h3>
+<p>Why that word "Dots?" If we think about Step 6 again, in the Dotted
 Version Vector case, you can imagine Vnode A generating the event <strong><code>{a, 3}</code></strong> and assigning it to the incoming value at once. Then merging the
 incoming DVV with the local one. The visualization of that PUT with
 dot assigned hopefully explains the name.</p>
@@ -297,7 +297,7 @@ dot assigned hopefully explains the name.</p>
 <p>Conceptually there is gap between the incoming version vector
 <strong><code>[{a, 1}]</code></strong> and the event <strong><code>{a, 3}</code></strong>, and this gap leads to naming the
 non-contiguous event a Dot. Like the dot on a lower case letter
-&quot;i&quot;. Strictly speaking a &quot;dot&quot; is a non-contiguous event, but they're
+"i". Strictly speaking a "dot" is a non-contiguous event, but they're
 used in other places (like CRDTs) simply as discrete event tags, so
 the simpler explanation is good enough.</p>
 <h2 id="further-material">Further Material</h2>
