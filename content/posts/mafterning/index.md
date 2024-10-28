@@ -12,7 +12,7 @@ Work remotely, sometimes? Or in an org with multiple global locations? How often
 More than once?
 
 I've worked remote since 2011, mainly with US based companies. When I worked at Basho, one my colleagues (shame on me, I can't recall who!)
-coined the portmanteau compressed neologism "Marfterning!" simply: Good **M**orning **after**noon eve**ning**.
+coined the portmanteau compressed neologism "Mafterning!" simply: Good **M**orning **after**noon eve**ning**.
 
 I invite you to make use of this greeting to simplify communication across timezones.
 
